@@ -23,11 +23,19 @@
 #   bash setup/06-run-windows-native.sh --full          # 全量（跑全部数据集，耗时长）
 #   bash setup/06-run-windows-native.sh --dataset aime2024 --limit 2 --max-tokens 2000
 #   bash setup/06-run-windows-native.sh --stop          # 只停掉小模型服务
+#   bash setup/06-run-windows-native.sh --compare 50      # 三组对照实验（计划 §4 验证清单第 3 项）
+#   PYRODASH_MODEL=models/PyroDash-4B-GRPO-Lambda-0.6 bash setup/06-run-windows-native.sh --compare 50 --tag l06
 set -uo pipefail
 
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_PY="$PROJ/setup/.venv-win/Scripts/python.exe"
-MODEL_DIR="$PROJ/models/PyroDash-4B-GRPO-Lambda-0.05"
+# 可切换 checkpoint（对比 λ 用）：
+#   PYRODASH_MODEL=models/PyroDash-4B-GRPO-Lambda-0.6 bash setup/06-run-windows-native.sh 50
+_PM="${PYRODASH_MODEL:-models/PyroDash-4B-GRPO-Lambda-0.05}"
+case "$_PM" in
+  /*|[A-Za-z]:*) MODEL_DIR="$_PM" ;;
+  *) MODEL_DIR="$PROJ/$_PM" ;;
+esac
 PORT=8001
 SMALL_URL="http://127.0.0.1:$PORT/v1"
 
@@ -35,6 +43,12 @@ SMALL_URL="http://127.0.0.1:$PORT/v1"
 export LLM_BASE_URL="${LLM_BASE_URL:-https://ai-api.bj.tkoffice.cn/v1}"
 export LLM_API_KEY="${LLM_API_KEY:-$(cat "$PROJ/setup/.llm_key" 2>/dev/null)}"
 export LLM_MODEL="${LLM_MODEL:-deepseek-v4-pro}"
+
+# ---- 小模型单请求超时（秒）----
+# 服务端 serve_small.py 是 ThreadingHTTPServer + 全局锁，GPU 实际串行生成：
+# 并发提交时后面的请求要排队，排队时间也算进这个超时。长生成（λ 大、小模型自己推理多）
+# 或高并发下必须调大，否则会 requests.ReadTimeout。
+export SMALL_TIMEOUT="${SMALL_TIMEOUT:-3600}"
 
 # ---- 数据集离线缓存（setup/05 产出；缺失则回退到在线镜像）----
 if [ -d "$PROJ/setup/hf_home/datasets" ]; then
@@ -93,11 +107,39 @@ if [ "${1:-}" = "--full" ]; then
   ARGS=(--datasets math gsm8k minerva olympiad aime2024 aime2025 --max-tokens 8192)
 fi
 
+COMPARE=0
+if [ "${1:-}" = "--compare" ]; then
+  COMPARE=1; shift
+  ARGS=("$@")
+  if [ ${#ARGS[@]} -eq 0 ]; then
+    ARGS=(--dataset gsm8k --limit 50 --max-tokens 4096)
+  elif [[ "${ARGS[0]}" =~ ^[0-9]+$ ]]; then
+    ARGS=(--dataset gsm8k --limit "${ARGS[0]}" --max-tokens 4096 "${ARGS[@]:1}")
+  fi
+fi
+
 if [ ${#ARGS[@]} -eq 0 ]; then
   ARGS=(--dataset gsm8k --limit 5 --max-tokens 2500)
 elif [[ "${ARGS[0]}" =~ ^[0-9]+$ ]]; then
   # 首个参数是数字 -> 视为 gsm8k 的样本数，并保留其余选项
   ARGS=(--dataset gsm8k --limit "${ARGS[0]}" --max-tokens 2500 "${ARGS[@]:1}")
+fi
+
+if [ "$COMPARE" = "1" ]; then
+  echo "[run] compare_arms.py ${ARGS[*]}"
+  echo "[run] 模型 $MODEL_DIR"
+  echo "[run] LLM=$LLM_BASE_URL model=$LLM_MODEL"
+  echo "---------------------------------------------------------------"
+  "$VENV_PY" "$PROJ/setup/compare_arms.py" \
+    --model-path "$MODEL_DIR" \
+    --small-base-url "$SMALL_URL" --small-model small-model \
+    --llm-base-url "$LLM_BASE_URL" --llm-api-key "$LLM_API_KEY" --llm-model "$LLM_MODEL" \
+    "${ARGS[@]}"
+  rc=$?
+  echo "---------------------------------------------------------------"
+  echo "[run] 退出码 $rc"
+  echo "[run] 停服务请执行：bash setup/06-run-windows-native.sh --stop"
+  exit $rc
 fi
 
 echo "[run] smoke_offload.py ${ARGS[*]}"

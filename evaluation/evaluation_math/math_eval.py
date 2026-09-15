@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -96,7 +97,10 @@ def call_small_completion(
         "include_stop_str_in_output": True,
         "skip_special_tokens": False,
     }
-    resp = requests.post(url, json=body, timeout=600.0)
+    # 单请求超时。服务端是串行生成的（GPU 独占），并发提交时后面的请求会排队，
+    # 所以高负载下需要把它调大，否则会 ReadTimeout。用 SMALL_TIMEOUT 覆盖（秒）。
+    timeout_s = float(os.environ.get("SMALL_TIMEOUT", "600"))
+    resp = requests.post(url, json=body, timeout=timeout_s)
     resp.raise_for_status()
     data = resp.json()
     choice = data["choices"][0]

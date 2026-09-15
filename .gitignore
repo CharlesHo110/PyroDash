@@ -226,4 +226,5 @@ models/
 results/
 results_500/
 results_smoke*/
+results_compare*/
 vllm_serve.log
