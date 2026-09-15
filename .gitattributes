@@ -1,0 +1,23 @@
+# 统一行尾策略
+#
+# 背景：Windows 上 git 常配 core.autocrlf=true，会让 .sh 被检出成 CRLF。
+# CRLF 的 shell 脚本在 Git Bash / WSL 下会报 `$'\r': command not found`，
+# 直接导致脚本不可执行（本目录正是 Windows + Git Bash 混合使用场景）。
+
+# 默认：仓库内存 LF，检出也用 LF
+* text=auto eol=lf
+
+# Windows 原生工具链的脚本保持 CRLF
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件，禁止任何行尾转换
+*.safetensors binary
+*.bin binary
+*.exe binary
+*.parquet binary
+*.arrow binary
+*.png binary
+*.jpg binary
