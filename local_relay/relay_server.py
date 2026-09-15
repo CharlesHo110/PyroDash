@@ -190,7 +190,20 @@ class Stats:
             self.llm_seconds += rec["pyrodash"].get("llm_elapsed_s", 0.0) or 0.0
             if rec["pyrodash"].get("error"):
                 self.errors += 1
-            self._recent.append(rec)
+            # 只留紧凑摘要，不存完整响应体 —— 否则 20 条 recent 能让 /v1/stats
+            # 涨到几百 KB，而它的用途只是「看占比」。全文请看服务端日志。
+            self._recent.append(
+                {
+                    "route": route or "-",
+                    "llm_model": rec["pyrodash"].get("llm_model"),
+                    "small_tokens": rec["pyrodash"].get("small_tokens", 0),
+                    "llm_tokens": rec["pyrodash"].get("llm_tokens", 0),
+                    "small_elapsed_s": rec["pyrodash"].get("small_elapsed_s", 0.0),
+                    "llm_elapsed_s": rec["pyrodash"].get("llm_elapsed_s", 0.0),
+                    "total_elapsed_s": rec["pyrodash"].get("total_elapsed_s", 0.0),
+                    "error": rec["pyrodash"].get("error"),
+                }
+            )
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
