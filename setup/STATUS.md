@@ -52,6 +52,116 @@ Offload:     5/5 (100.0%)
 | 18 | **修复长生成请求超时** | ✅ | 服务端串行 → `SMALL_TIMEOUT` 可调；修复后 0 超时跑完 |
 | 19 | **§4 验证清单③：三组对照** | ✅ | GSM8K 50 题 × 3 臂，见下方「对照实验结果」 |
 | 20 | **§4 验证清单④：λ=0.6 对比** | ✅ | offload 96% → 0%，远端成本 41,916 → 0 |
+| 21 | **本机可用版（`local_relay/`）** | ✅ | 路由 7/7 正确；轻任务本机 0.4–2.5s、大模型 0 token |
+| 22 | **llama.cpp 落地（免编译）** | ✅ | `llama-server.exe` build 10982，`/apply-template` 实测可用 |
+| 23 | **Qwen3-4B GGUF（2.33 GB）** | ✅ | 走魔搭 5.45 MB/s，437 秒下完 |
+| 24 | **交接机制不依赖训练** | ✅ | 实测通用模型不主动交接，改用「预算内没答完」触发 |
+| 25 | **带 tools 请求透传** | ✅ | `route=handoff:tools`，3.4s，`tool_calls` 正确 |
+| 26 | **接入 pi** | ✅ | `~/.pi/agent/models.json` 新增 `pyrodash-local`，原 4 个 provider 逐字节未变 |
+
+## 🚀 新增：本机可用版（`local_relay/`）
+
+上面第 6–20 项做的是**数学评测**（验证论文的机制与 λ 对交接率的影响）。
+本节做的是另一件事：**把同一套机制做成日常真的能用的东西** —— 一个 OpenAI 兼容端点，
+接进 pi 或任何 OpenAI 客户端，本机小模型先接活、搞不定就交给远端大模型接着写。
+
+```
+pi / 任何 OpenAI 客户端
+        │  http://127.0.0.1:8010/v1
+        ▼
+  relay_server.py   ── 注入交接协议 / 判定路由 / 共享预算
+        ├── route=small          → llama-server :8080（Qwen3-4B Q4_K_M）
+        └── route=handoff:*      → deepseek-v4-pro（收到半截推理，接着写）
+```
+
+### 实测结果（RTX 3060，CPU 回退模式）
+
+| 用例 | 期望 | 实际路由 | 小模型 | 大模型 | 总耗时 |
+|---|---|---|---|---|---|
+| 翻译 | small | ✅ `small` | 17 tok | 0 | 1.9 s |
+| 算术（1+1） | small | ✅ `small` | 2 tok | 0 | 0.4 s |
+| 总结 | small | ✅ `small` | 19 tok | 0 | 2.2 s |
+| 格式转换 | small | ✅ `small` | 21 tok | 0 | 2.5 s |
+| 多步推理 | handoff | ✅ `handoff:limit` | 512 tok / 53 s | 1536 tok / 27 s | 80 s |
+| 长链条代码 | handoff | ✅ `handoff:limit` | 512 tok / 53 s | 1536 tok / 27 s | 80 s |
+| 领域知识 | handoff | ✅ `handoff:limit` | 512 tok / 53 s | 1536 tok / 27 s | 80 s |
+| 带 `tools` 的请求 | handoff | ✅ `handoff:tools` | 0（跳过） | 77 tok | 3.4 s |
+
+**路由判定 7/7 全部符合预期**；大模型 token 占比 74.3%（总 6203 里 4608 给大模型）。
+
+### ⚠️ 重要发现：通用模型不会自发交接
+
+给 Qwen3-4B-Instruct-2507 灌完整套「遇到不会的就输出 `<|llm_offload|>` 然后停止」的协议
+提示词，实测它**一次都不肯交**（`handoff:tag` 恒为 0）——它会硬着头皮往下写，直到被 token
+上限截断。**这正是 PyroDash 要花力气做 GRPO 训练的原因：「知道自己不会」需要训练。**
+
+因此本 relay 换了一条不依赖模型自知之明的路：
+
+1. `stop_type == "word"` —— 模型主动吐交接标记（训练过的模型才常见，属优化项）；
+2. `stop_type == "limit"` —— **本机小模型没在 `SMALL_MAX_TOKENS`（默认 512）内答完**。
+   这条不需要任何训练，天然就是「本机干不完」的信号，而且它已经写出的半截推理正好
+   就是大模型的起手式。
+
+于是 `SMALL_MAX_TOKENS` 成了唯一的、也是最有效的旋钮：调小→交接更积极更省钱，
+调大→本机承担更多、延迟更低。
+
+### 为什么小模型侧走 `llama.cpp 原生 /completion`
+
+因为**只有原生端点能无歧义区分「答完了」和「撞到交接标记」**：
+
+```jsonc
+// POST /completion  →  stop_type ∈ {none, eos, limit, word}
+{"content": "...", "stop_type": "word", "stopping_word": "<|llm_offload|>"}
+```
+
+OpenAI 兼容端点两种情况都只给 `finish_reason: "stop"`；vLLM 那套
+`include_stop_str_in_output` 在 llama.cpp 里**不存在**（实测 `/completion` 与
+`/v1/chat/completions` 都无此参数），但 `stop_type`/`stopping_word` 比它更干净 ——
+标记本来就不会混进 `content`。
+
+### 新增文件
+
+| 文件 | 作用 |
+|---|---|
+| `local_relay/relay_server.py` | 中转服务本体（纯标准库 HTTP，无需 fastapi/uvicorn） |
+| `local_relay/offload_protocol.py` | 交接协议提示词与 `inject_protocol()` |
+| `local_relay/run.sh` | 一键启停（llama-server + relay，含就绪等待与自测） |
+| `local_relay/test_relay.py` | 端到端测试（简单/困难两组 + `--ask` 自由提问） |
+| `local_relay/selftest_offline.py` | 纯离线自检，不联网不占显存 |
+| `local_relay/README.md` | 使用说明、调参、排错 |
+| `setup/07-install-llama.sh` | 下载 llama.cpp Windows CUDA 预编译包 |
+| `setup/07b-fetch-cudart.py` | 走清华 PyPI 取 CUDA 运行时 DLL |
+| `setup/08-download-gguf.py` | 从 modelscope 下载 GGUF |
+
+### 复现
+
+```bash
+bash   setup/07-install-llama.sh      # llama.cpp（242 MB）
+python setup/07b-fetch-cudart.py      # CUDA 运行时 DLL
+python setup/08-download-gguf.py      # Qwen3-4B Q4_K_M（2.33 GB）
+
+bash local_relay/run.sh               # 起服务，打印 Base URL / API Key / Model
+python local_relay/test_relay.py --suite all
+python local_relay/selftest_offline.py
+bash local_relay/run.sh --stop        # 停
+```
+
+### ⚠️ 踩到的两个坑（已解决）
+
+**1. GitHub 是唯一慢源，但 PyPI 镜像上有同一批 DLL。**
+`cudart-llama-bin-win-cuda-12.4-x64.zip` 在 GitHub 上 391 MB，实测只有约 165 KB/s
+（已试 6 个加速镜像，全部更慢或不可用）。同一批 DLL 在 PyPI 上打包成
+`nvidia-cublas-cu12` / `nvidia-cuda-runtime-cu12` 的 win_amd64 wheel，改走清华镜像
+速度高一个数量级。`07b-fetch-cudart.py` 就是干这个的。
+（注意：PyPI JSON 里返回的 `url` 字段指向官方 CDN `files.pythonhosted.org`，
+不是镜像本体，用之前要把 host 换掉，否则等于没走镜像。）
+
+**2. CUDA 构建缺 cublas 时会静默回退到 CPU，不报错。**
+只补了 `cudart64_12.dll` 时 `llama-server.exe` 能正常启动、模型正常加载、
+`/health` 返回 ok，**但日志里一个 `CUDA` 字样都没有**，实际跑在 CPU 上（约 10 tok/s）。
+判断是否真的用上 GPU，看启动日志里有没有 CUDA 相关行。
+
+---
 
 ## 🧪 对照实验结果（计划 §4 验证清单 ③④）
 

@@ -570,11 +570,21 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         emit({"role": "assistant", "content": ""})
-        text = rec["choices"][0]["message"]["content"]
+        message = rec["choices"][0]["message"]
+        text = message.get("content") or ""
+        tool_calls = message.get("tool_calls") or []
         step = 96  # 按固定宽度切块，纯为兼容流式客户端
         for i in range(0, len(text), step):
             emit({"content": text[i : i + step]})
-        emit({}, "stop")
+        if tool_calls:
+            # OpenAI 流式协议里 tool_calls 走 delta.tool_calls，一次给完
+            # （TCP 已经帮我们分帧，没必要再切）。**漏了这一步会让 pi 的工具
+            # 调用在流式下静默失效** —— pi 默认就是流式 + 工具。
+            for tc in tool_calls:
+                emit({"tool_calls": [tc]})
+            emit({}, "tool_calls")
+        else:
+            emit({}, "stop")
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
