@@ -96,7 +96,8 @@ fi
 if [ ${#ARGS[@]} -eq 0 ]; then
   ARGS=(--dataset gsm8k --limit 5 --max-tokens 2500)
 elif [[ "${ARGS[0]}" =~ ^[0-9]+$ ]]; then
-  ARGS=(--dataset gsm8k --limit "${ARGS[0]}" --max-tokens 2500)
+  # 首个参数是数字 -> 视为 gsm8k 的样本数，并保留其余选项
+  ARGS=(--dataset gsm8k --limit "${ARGS[0]}" --max-tokens 2500 "${ARGS[@]:1}")
 fi
 
 echo "[run] smoke_offload.py ${ARGS[*]}"
