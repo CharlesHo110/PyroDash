@@ -1,0 +1,75 @@
+{
+  "summary": {
+    "dataset": "gsm8k",
+    "enable_thinking": true,
+    "total": 3,
+    "accuracy": 1.0,
+    "offload_count": 3,
+    "offload_rate": 1.0,
+    "total_small_prompt_tokens": 340,
+    "total_small_completion_tokens": 281,
+    "total_llm_prompt_tokens": 1249,
+    "total_llm_completion_tokens": 1359,
+    "wall_s": 39.280008999980055,
+    "correct": 3
+  },
+  "samples": [
+    {
+      "idx": 0,
+      "question": "Janet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?",
+      "answer": "18",
+      "raw_response": "To find Janet's daily earnings, we first determine the total number of eggs she produces, which is 16 per day. Next, we calculate the number of eggs used for personal consumption and baking. She eats 3 eggs for breakfast and uses 4 for muffins, totaling 7 eggs used. Subtracting these from the total production gives the number of eggs available for sale: $16 - 7 = 9$ eggs. Finally, we multiply the number of sellable eggs by the price per egg ($2) to find the total revenue: $9 \\times 2 = 18$ dollars.<|llm_offload|>",
+      "completed_response": "<think>To find Janet's daily earnings, we first determine the total number of eggs she produces, which is 16 per day. Next, we calculate the number of eggs used for personal consumption and baking. She eats 3 eggs for breakfast and uses 4 for muffins, totaling 7 eggs used. Subtracting these from the total production gives the number of eggs available for sale: $16 - 7 = 9$ eggs. Finally, we multiply the number of sellable eggs by the price per egg ($2) to find the total revenue: $9 \\times 2 = 18$ dollars.We need answer the user. Need follow protocol. The part_think already contains reasoning and conclusion. Need produce final answer in final. Ensure no mention of part_think. We can simply give step-by-step maybe concise but not repeat? The instruction says continue from where stopped; if part_think concludes, proceed directly final answer. So final answer with answer box. Need maybe include reasoning? User asked step by step. part_think has step by step but not visible? We need user-facing answer only normal assistant content. We can restate step by step maybe okay. But protocol says if part_think already concludes, proceed directly to final answer. We should output final answer likely include brief reasoning and box. Since user asked step by step, we can provide brief steps. But avoid mentioning part_think. We can write:\n\nTotal eggs: 16\nUsed: 3+4=7\nRemaining: 9\nEarnings: 9×$2=$18\n\\boxed{18}\n\nNeed ensure final answer within \\boxed{}. Done.</think>Janet starts with 16 eggs each day.\n\nShe uses:\n- 3 eggs for breakfast\n- 4 eggs for muffins\n\nTotal used: \\(3 + 4 = 7\\) eggs\n\nRemaining eggs to sell: \\(16 - 7 = 9\\)\n\nAt $2 per egg, she makes:\n\\[\n9 \\times 2 = 18\n\\]\n\n\\[\n\\boxed{18}\n\\]",
+      "has_offload": true,
+      "score": 1,
+      "qwen_usage": {
+        "prompt_tokens": 129,
+        "completion_tokens": 128,
+        "total_tokens": 257
+      },
+      "llm_usage": {
+        "prompt_tokens": 471,
+        "completion_tokens": 305,
+        "total_tokens": 776
+      }
+    },
+    {
+      "idx": 1,
+      "question": "A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?",
+      "answer": "3",
+      "raw_response": "To find the total number of bolts, first determine the amount of white fiber required. The problem states the robe takes half as much white fiber as blue fiber. Since 2 bolts of blue fiber are used, the white fiber amount is $2 / 2 = 1$ bolt. Next, add the bolts of blue fiber and white fiber together: $2 + 1 = 3$ bolts.<|llm_offload|>",
+      "completed_response": "<think>To find the total number of bolts, first determine the amount of white fiber required. The problem states the robe takes half as much white fiber as blue fiber. Since 2 bolts of blue fiber are used, the white fiber amount is $2 / 2 = 1$ bolt. Next, add the bolts of blue fiber and white fiber together: $2 + 1 = 3$ bolts.We need answer user. We have part_think already reasoning. Need final answer within \\boxed{}. We need not repeat. Just provide final maybe concise step-by-step? The instruction says \"Please reason step by step, and put your final answer within \\boxed{}.\" We can include step-by-step maybe from part_think but not repeat? We need continue. The part_think concluded. Need final answer. We can say: Blue = 2 bolts, white = half of 2 = 1 bolt, total = 2+1=3 bolts. Final \\boxed{3}. Ensure final answer in box.</think>Blue fiber: 2 bolts  \nWhite fiber: half of 2 = 1 bolt  \nTotal: 2 + 1 = 3 bolts  \n\n\\boxed{3}",
+      "has_offload": true,
+      "score": 1,
+      "qwen_usage": {
+        "prompt_tokens": 90,
+        "completion_tokens": 83,
+        "total_tokens": 173
+      },
+      "llm_usage": {
+        "prompt_tokens": 392,
+        "completion_tokens": 168,
+        "total_tokens": 560
+      }
+    },
+    {
+      "idx": 2,
+      "question": "Josh decides to try flipping a house.  He buys a house for $80,000 and then puts in $50,000 in repairs.  This increased the value of the house by 150%.  How much profit did he make?",
+      "answer": "70000",
+      "raw_response": "To find the profit, we first determine the total cost of the house. Josh bought the house for $80,000 and spent $50,000 on repairs, so the total cost is $80,000 + $50,000 = $130,000.<|llm_offload|>",
+      "completed_response": "<think>To find the profit, we first determine the total cost of the house. Josh bought the house for $80,000 and spent $50,000 on repairs, so the total cost is $80,000 + $50,000 = $130,000.We need answer step by step. We have partial think: total cost $130,000. Need determine increased value by 150%. Need clarify increased value of house by 150% means value increased by 150% of what? Usually \"increased the value of the house by 150%\" means the house's value went up by 150% from original value? Need calculate profit. Let's parse.\n\nOriginal buy $80,000. Repairs $50,000. This increased the value of the house by 150%. If house was bought for $80,000, increased value by 150% means new value = original + 150% of original = 250% of $80,000 = $200,000. Or could mean the repairs increased value by 150% of their cost? Wording: \"puts in $50,000 in repairs. This increased the value of the house by 150%.\" Typically means house value increased by 150% (of original purchase price? maybe value after repairs). Need infer. Common math word problem: bought for $80,000, put in $50,000 repairs, increased value by 150%. How much profit? Profit = new value - total cost. If increased by 150% from original value, new value = 80,000 * 2.5 = 200,000. Total cost = 130,000. Profit = 70,000. If increased by 150% of total investment? New value = 130,000 * 2.5? Hmm.\n\nLet's read exact: \"He buys a house for $80,000 and then puts in $50,000 in repairs. This increased the value of the house by 150%. How much profit did he make?\" The phrase \"This increased the value of the house by 150%\" refers to purchase? \"This\" maybe the repairs increased the house value by 150%. Increase relative to the original value? Since \"increased the value of the house by 150%\" without specifying, in real estate returns, return on investment? Could be value after repairs is 150% higher than purchase price. We need step-by-step and final boxed.\n\nLet's ensure no trick. If house bought for $80k, repairs $50k. Increased value by 150%. If increased value by 150%, final value = initial value + 150% of initial value = 2.5 * initial. If initial value = 80k, final = 200k. Profit = sale price - total investment = 200k - 130k = 70k. If instead \"increased by 150%\" maybe means final value is 150% of original (i.e., increased by 50%)? Some ambiguous language: \"increased by 150%\" means addition; \"increased to 150%\" means 1.5 times. The problem says \"by 150%\" so yes 2.5x.\n\nNeed final answer only maybe with steps. We have part_think already cost. We need continue. We must not mention part_think. We can provide reasoning. We should include final answer in \\boxed{}. The final response can have step-by-step and final. Ensure no extra commentary.\n\nLet's produce concise:\n- Total cost = $80,000 + $50,000 = $130,000.\n- Increase by 150% means new value = $80,000 + 1.5 * $80,000 = $200,000 (assuming relative to original purchase value).\n- Profit = $200,000 - $130,000 = $70,000.\n\nBut wait: \"This increased the value of the house by 150%\" Could also mean the value increased from some original value by 150%; original value could be $80k before repairs. Yes. Step.\n\nNeed final box.</think>Total cost = \\$80,000 + \\$50,000 = \\$130,000.\n\nThe house’s value increased by 150%, so the new value is:\n\n\\$80,000 + 1.5(\\$80,000) = \\$200,000\n\nProfit = new value - total cost:\n\n\\$200,000 - \\$130,000 = \\$70,000\n\n\\[\n\\boxed{70000}\n\\]",
+      "has_offload": true,
+      "score": 1,
+      "qwen_usage": {
+        "prompt_tokens": 121,
+        "completion_tokens": 70,
+        "total_tokens": 191
+      },
+      "llm_usage": {
+        "prompt_tokens": 386,
+        "completion_tokens": 886,
+        "total_tokens": 1272
+      }
+    }
+  ]
+}
