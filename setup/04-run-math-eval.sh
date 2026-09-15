@@ -10,10 +10,24 @@ PROJ=/mnt/d/hecan/PyroDash
 VENV="${VENV:-$HOME/pyrodash-venv}"
 MODEL="${MODEL:-$PROJ/models/PyroDash-4B-GRPO-Lambda-0.05}"
 
-# ---- 远端大模型：tkoffice 内网 DeepSeek（取自 aiConfig/claude/enableClaudeChina.py）----
+# ---- 远端大模型：tkoffice 内网 DeepSeek（仅公司网络/VPN 可达）----
+# ⚠️ 切勿把密钥硬编码进仓库（本仓库曾这么干过，已清除）。按以下优先级提供：
+#   1) export LLM_API_KEY=sk-xxx
+#   2) 写入 setup/.llm_key（已在 .gitignore 忽略，只放一行密钥）
+#   3) 从 aiConfig/claude/enableClaudeChina.py 拷
 LLM_BASE_URL="${LLM_BASE_URL:-https://ai-api.bj.tkoffice.cn/v1}"
-LLM_API_KEY="${LLM_API_KEY:-$(cat "$PROJ/setup/.llm_key" 2>/dev/null)}"
+if [ -z "${LLM_API_KEY:-}" ] && [ -f "$PROJ/setup/.llm_key" ]; then
+  LLM_API_KEY="$(tr -d '[:space:]' < "$PROJ/setup/.llm_key")"
+fi
+LLM_API_KEY="${LLM_API_KEY:-}"
 LLM_MODEL="${LLM_MODEL:-deepseek-v4-pro}"          # 省钱可换 deepseek-v4-flash
+
+if [ -z "$LLM_API_KEY" ]; then
+  echo "✗ 缺少 LLM_API_KEY（勿写入仓库）。" >&2
+  echo "  请 export LLM_API_KEY=...，或写入 $PROJ/setup/.llm_key" >&2
+  echo "  密钥来源：aiConfig/claude/enableClaudeChina.py" >&2
+  exit 1
+fi
 
 # ---- 本地 vLLM：RTX 3060 12GB 的参数（40960 上下文在 12GB 上会 OOM，压到 16384）----
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"

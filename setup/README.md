@@ -205,7 +205,22 @@ bash /mnt/d/hecan/PyroDash/setup/04-run-math-eval.sh gsm8k math amc minerva olym
 | `download_model.py` | 任意 | 跨平台下载器（ModelScope/HF 双源、断点续传、大小+token 校验） |
 | `prefetch_datasets.py` | Windows | 预取 7 个数据集原始文件 + 记录 sha |
 
-环境变量（都可覆盖）：`PYRODASH_MODEL`（切 checkpoint）、`SMALL_TIMEOUT`（小模型单请求超时秒数，默认 3600）、`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`。
+环境变量（都可覆盖）：`PYRODASH_MODEL`（切 checkpoint）、`SMALL_TIMEOUT`（小模型单请求超时秒数，默认 3600）、`LLM_BASE_URL` / `LLM_MODEL`。
+
+### ⚠️ API 密钥怎么给（不要写进仓库）
+
+脚本**不再内置密钥默认值**。按优先级：
+
+1. `export LLM_API_KEY=sk-xxx`（推荐，一次性）
+2. 写入 `setup/.llm_key`（已在 `.gitignore` 忽略，只放一行密钥）——最省事，脚本自动读
+3. 从 `aiConfig/claude/enableClaudeChina.py` 复制
+
+密钥缺失时脚本会直接报错退出并提示，不会静默拿空 key 去请求。
+
+```bash
+# 方式 2 的最快建法
+printf '%s\n' 'sk-你的密钥' > setup/.llm_key
+```
 
 ### 路径 A（WSL2 + vLLM）—— 需管理员
 

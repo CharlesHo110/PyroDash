@@ -39,9 +39,16 @@ esac
 PORT=8001
 SMALL_URL="http://127.0.0.1:$PORT/v1"
 
-# ---- 内网大模型（tkoffice 网关，仅内网可达；密钥同 aiConfig/claude/enableClaudeChina.py）----
+# ---- 内网大模型（tkoffice 网关，仅公司网络/VPN 可达）----
+# ⚠️ 切勿把密钥硬编码进仓库（本仓库曾这么干过，已清除）。按以下优先级提供：
+#   1) export LLM_API_KEY=sk-xxx
+#   2) 写入 setup/.llm_key（已在 .gitignore 忽略，只放一行密钥）
+#   3) 从 aiConfig/claude/enableClaudeChina.py 拷
 export LLM_BASE_URL="${LLM_BASE_URL:-https://ai-api.bj.tkoffice.cn/v1}"
-export LLM_API_KEY="${LLM_API_KEY:-$(cat "$PROJ/setup/.llm_key" 2>/dev/null)}"
+if [ -z "${LLM_API_KEY:-}" ] && [ -f "$PROJ/setup/.llm_key" ]; then
+  LLM_API_KEY="$(tr -d '[:space:]' < "$PROJ/setup/.llm_key")"
+fi
+export LLM_API_KEY="${LLM_API_KEY:-}"
 export LLM_MODEL="${LLM_MODEL:-deepseek-v4-pro}"
 
 # ---- 小模型单请求超时（秒）----
@@ -76,7 +83,9 @@ if [ "${1:-}" = "--stop" ]; then stop_server; exit 0; fi
 # ---------------------------------------------------------------- 前置检查
 [ -x "$VENV_PY" ] || { echo "✗ 未找到 venv: $VENV_PY"; echo "  请先按脚本头部注释创建（约需 3GB 磁盘）"; exit 1; }
 [ -d "$MODEL_DIR" ] || { echo "✗ 未找到模型目录: $MODEL_DIR"; echo "  请先跑 setup/03-download-model.sh 或 setup/download_model.py"; exit 1; }
-[ -n "$LLM_API_KEY" ] || { echo "✗ 缺少 LLM_API_KEY"; exit 1; }
+[ -n "$LLM_API_KEY" ] || { echo "✗ 缺少 LLM_API_KEY（勿写入仓库）。"
+  echo "  请 export LLM_API_KEY=...，或写入 $PROJ/setup/.llm_key"
+  echo "  密钥来源：aiConfig/claude/enableClaudeChina.py"; exit 1; }
 
 # ---------------------------------------------------------------- 启动小模型服务
 if server_up; then

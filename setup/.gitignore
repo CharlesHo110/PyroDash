@@ -6,3 +6,6 @@ datasets/
 *.log
 *.err
 __pycache__/
+
+# 本地密钥文件（绝不入库）
+.llm_key
