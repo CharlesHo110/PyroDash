@@ -35,9 +35,9 @@ PyroDash 的核心思想是**token 级的两级协作**：一个跑在本机的�
 
 | 场景 | 结果 |
 |------|------|
-| 翻译 / 算术 / 总结 / 格式转换 | `route=small`，**本机 0.4 – 2.5 秒**答完，大模型 0 token |
+| 翻译 / 算术 / 总结 / 格式转换 | `route=small`，**本机 0.04 – 0.55 秒**答完，大模型 0 token |
 | 多步推理 / 长代码 / 领域知识 | `route=handoff:limit`，本机给 512 token 半截推理 → 大模型接力 |
-| 带 `tools` 的请求（pi 的工具调用） | `route=handoff:tools`，**完全跳过小模型**，`tool_calls` 原样透传 |
+| 带 `tools` 的请求（pi 的工具调用） | `route=handoff:tools`，**完全跳过小模型**，`tool_calls` 原样透传（流式与非流式都验证过） |
 | 路由是否准确 | **7/7 全部符合预期** |
 | 大模型 token 占比 | 74.3%（总 6203 token 里 4608 给大模型） |
 
@@ -73,6 +73,11 @@ bash   setup/07-install-llama.sh      # llama.cpp Windows CUDA 预编译包（�
 python setup/07b-fetch-cudart.py      # CUDA 运行时 DLL（走清华 PyPI，比 GitHub 快得多）
 python setup/08-download-gguf.py      # Qwen3-4B-Instruct-2507 Q4_K_M（2.33 GB，modelscope）
 ```
+
+> **`07b-fetch-cudart.py` 一定要跑。** 不跑的话 llama.cpp 会静默回退到 CPU（10 tok/s 而不是 92），
+> 而且**任何日志和返回值都不会告诉你这件事**——它照常启动、照常返回 ok。
+> 之所以单独搞一个脚本：官方那个 `cudart-llama-bin-win-cuda-12.4-x64.zip` 在 GitHub 上有 391 MB，
+> 实测只有 ~106 KB/s；同一批 DLL 打包成 PyPI wheel 放在清华镜像上，实测 **5.07 MB/s**。
 
 ### 一条命令起全套
 
@@ -170,10 +175,10 @@ curl http://127.0.0.1:8010/v1/chat/completions \
     "small_model": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
     "small_tokens": 512,
     "small_stop_type": "limit",
-    "small_elapsed_s": 52.5,
+    "small_elapsed_s": 5.6,
     "llm_model": "deepseek-v4-pro",
     "llm_tokens": 1536,
-    "llm_elapsed_s": 27.1,
+    "llm_elapsed_s": 28.7,
     "total_budget": 2048,
     "budget_used": 2048,
     "tools_passthrough": false,
@@ -186,7 +191,7 @@ curl http://127.0.0.1:8010/v1/chat/completions \
 
 | 值 | 含义 |
 |----|------|
-| `small` | 本机搞定，大模型 0 token（**省钱的就是这种**） |
+| `small` | 本机搞定，大模型 0 token（**省钱的就是这种**，实测 0.04 – 0.55 秒） |
 | `handoff:tag` | 小模型主动吐了交接标记（训练过的模型才常见） |
 | `handoff:limit` | 小模型预算内没答完 → 交接（**当前主力路径**） |
 | `handoff:tools` | 请求带 `tools`，直接跳过大模型（小模型做不了工具编排） |
@@ -200,8 +205,9 @@ curl -s -X POST http://127.0.0.1:8010/v1/stats/reset
 curl -s http://127.0.0.1:8010/health
 ```
 
-`/v1/stats` 里的 `offload.rate_pct` 就是**交接率**，`tokens.llm_share_pct` 就是
-**大模型 token 占比**——后者越低越省钱。把这两个数和纯大模型的基线对比，就是 PyroDash
+`/v1/stats` 里的 `offload.rate_pct` 就是**交接率**（数值型百分比；`rate` 是 0–1 的小数，
+`rate_pct_str` 是给人看的 `"42.9%"`），`tokens.llm_share_pct` 就是**大模型 token 占比**
+——后者越低越省钱。把这两个数和纯大模型的基线对比，就是 PyroDash
 论文里那张「相对成本」图的雏形。
 
 ---
@@ -269,7 +275,8 @@ chat 模板由 llama-server 自己渲染（`POST /apply-template`，用 `--jinja
 
 | 症状 | 原因 / 处理 |
 |------|-------------|
-| `llama-server` 起来了但很慢 | 日志里没有 `CUDA` 字样 = 静默回退到 CPU 了。跑 `python setup/07b-fetch-cudart.py` 补 `cublas64_12.dll` / `cublasLt64_12.dll` |
+| `llama-server` 起来了但很慢（约 10 tok/s） | CUDA 运行时 DLL 没装齐，静默回退到 CPU 了。跑 `python setup/07b-fetch-cudart.py` 补 `cublas64_12.dll` / `cublasLt64_12.dll`，**重启 llama-server** |
+| 不确定到底跑在 CPU 还是 GPU | 看日志 **没用**（本 build 两种情况都不打 CUDA 行）。用 `cd setup/llama.cpp && ./llama-server.exe --list-devices`，能列出 `CUDA0: NVIDIA GeForce RTX 3060 (...)` 才算用上；或看吞吐，92 tok/s 是 GPU、10 tok/s 是 CPU |
 | 全是 `handoff:budget-exhausted` | 小模型把总预算吃光。调小 `SMALL_MAX_TOKENS`，或让客户端传更大的 `max_tokens` |
 | 全是 `handoff:limit`，没有 `small` | 正常现象，见第 1 节。想留更多在本机就调大 `SMALL_MAX_TOKENS` |
 | `handoff:tag` 恒为 0 | **预期行为**，通用模型不会自发交接。这是 PyroDash 要训练的原因，不是 bug |
@@ -312,5 +319,5 @@ local_relay/.run/*.pid                 进程号（run.sh --stop 用）
 | `evaluation/evaluation_math/llm_relay.py` 的 `_build_offload_messages` | 直接复用，保证「半截推理怎么接」的措辞与论文一致 |
 
 换句话说：**论文回答「训练能带来什么」，这里回答「不训练能拿到多少」**——而实测答案是
-「路由准确率 7/7，能省掉 1/4 的大模型 token，且本机的轻任务延迟只有 0.4 秒」。
+「路由准确率 7/7，能省掉 1/4 的大模型 token，且本机的轻任务延迟只有 0.04 秒」。
 剩下的差距（主动交接、更早交接）就是那篇论文里 GRPO 真正买到的东西。

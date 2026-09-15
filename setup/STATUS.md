@@ -74,20 +74,34 @@ pi / 任何 OpenAI 客户端
         └── route=handoff:*      → deepseek-v4-pro（收到半截推理，接着写）
 ```
 
-### 实测结果（RTX 3060，CPU 回退模式）
+### 实测结果（RTX 3060，Qwen3-4B Q4_K_M @ llama.cpp CUDA）
 
 | 用例 | 期望 | 实际路由 | 小模型 | 大模型 | 总耗时 |
 |---|---|---|---|---|---|
-| 翻译 | small | ✅ `small` | 17 tok | 0 | 1.9 s |
-| 算术（1+1） | small | ✅ `small` | 2 tok | 0 | 0.4 s |
-| 总结 | small | ✅ `small` | 19 tok | 0 | 2.2 s |
-| 格式转换 | small | ✅ `small` | 21 tok | 0 | 2.5 s |
-| 多步推理 | handoff | ✅ `handoff:limit` | 512 tok / 53 s | 1536 tok / 27 s | 80 s |
-| 长链条代码 | handoff | ✅ `handoff:limit` | 512 tok / 53 s | 1536 tok / 27 s | 80 s |
-| 领域知识 | handoff | ✅ `handoff:limit` | 512 tok / 53 s | 1536 tok / 27 s | 80 s |
+| 翻译 | small | ✅ `small` | 17 tok / 0.55 s | 0 | 0.59 s |
+| 算术（1+1） | small | ✅ `small` | 2 tok / 0.04 s | 0 | 0.08 s |
+| 总结 | small | ✅ `small` | 19 tok / 0.24 s | 0 | 0.28 s |
+| 格式转换 | small | ✅ `small` | 21 tok / 0.26 s | 0 | 0.30 s |
+| 多步推理 | handoff | ✅ `handoff:limit` | 512 tok / 5.6 s | 1536 tok / 28.7 s | 34.4 s |
+| 长链条代码 | handoff | ✅ `handoff:limit` | 512 tok / 6.0 s | 1536 tok / 28.1 s | 34.0 s |
+| 领域知识 | handoff | ✅ `handoff:limit` | 512 tok / 5.9 s | 1536 tok / 28.5 s | 34.5 s |
 | 带 `tools` 的请求 | handoff | ✅ `handoff:tools` | 0（跳过） | 77 tok | 3.4 s |
 
 **路由判定 7/7 全部符合预期**；大模型 token 占比 74.3%（总 6203 里 4608 给大模型）。
+
+小模型侧原生吞吐：生成 **92 tok/s**、prompt 处理 **912 tok/s**。
+
+#### CPU 回退 vs GPU（同一批用例）
+
+| | CPU 回退（缺 cublas） | GPU（补齐后） | 提升 |
+|---|---|---|---|
+| 小模型原生生成 | 10.2 tok/s | **92 tok/s** | 9× |
+| 轻任务（本机回答） | 0.4 – 2.5 s | **0.04 – 0.55 s** | 约 9× |
+| 小模型平均延迟 | 47.98 s | **2.66 s** | 18× |
+| 困难任务的小模型段 | 53 s | **5.6 s** | 9.5× |
+
+> GPU 不工作时整套仍然能跑通，只是困难任务里「小模型先写 512 token 半截推理」这一段要等
+> 53 秒，体验就崩了。补齐 CUDA 运行时 DLL 后降到 5.6 秒，整个设计才真正可用。
 
 ### ⚠️ 重要发现：通用模型不会自发交接
 
@@ -156,10 +170,25 @@ bash local_relay/run.sh --stop        # 停
 （注意：PyPI JSON 里返回的 `url` 字段指向官方 CDN `files.pythonhosted.org`，
 不是镜像本体，用之前要把 host 换掉，否则等于没走镜像。）
 
-**2. CUDA 构建缺 cublas 时会静默回退到 CPU，不报错。**
-只补了 `cudart64_12.dll` 时 `llama-server.exe` 能正常启动、模型正常加载、
-`/health` 返回 ok，**但日志里一个 `CUDA` 字样都没有**，实际跑在 CPU 上（约 10 tok/s）。
-判断是否真的用上 GPU，看启动日志里有没有 CUDA 相关行。
+**2. 这个 build 用上 GPU 也**不**打印 CUDA 日志 —— 别用日志判断跑在哪里。**
+
+只补了 `cudart64_12.dll`（缺 cublas）时，`llama-server.exe` 能正常启动、模型正常加载、
+`/health` 返回 ok，但实际跑在 CPU 上（约 10 tok/s）；补齐 `cublas64_12.dll` +
+`cublasLt64_12.dll` 后**用上了 GPU，可日志内容一字不改**（verbosity 3 下两边都是
+一个 `CUDA` 字样都没有）。
+
+正确的判断方法：
+
+```bash
+cd setup/llama.cpp && ./llama-server.exe --list-devices
+# 输出 CUDA0: NVIDIA GeForce RTX 3060 (12287 MiB, 11147 MiB free) 才算真的能用
+```
+
+或者直接看吞吐：本机实测 CPU 约 **10 tok/s**，GPU 约 **92 tok/s**（9 倍）。
+
+**3. 缺 cublas 是静默回退，不是报错。**
+CUDA 后端的加载失败在 verbosity 3 下不产生任何警告行，程序照常启动、照常服务，
+只是全部算在 CPU 上。所以「能跑」不等于「跑对了」，得看 `--list-devices` 或吞吐。
 
 ---
 

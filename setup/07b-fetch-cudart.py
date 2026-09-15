@@ -55,7 +55,13 @@ def wheel_url(pkg: str, version: str, mirror: str) -> tuple[str, int]:
     for entry in data["releases"].get(version, []):
         name = entry["filename"]
         if "win_amd64" in name and name.endswith(".whl"):
-            return entry["url"], int(entry.get("size") or 0)
+            # PyPI JSON 里给的 url 指向官方 CDN files.pythonhosted.org，
+            # **不是镜像本体**。直接用它等于绕过了镜像、照样走国际链路（实测
+            # 只有 ~106 KB/s）。必须把 host 换成镜像，实测 5.07 MB/s，快 48 倍。
+            url = entry["url"].replace(
+                "https://files.pythonhosted.org", mirror.rstrip("/")
+            )
+            return url, int(entry.get("size") or 0)
     raise SystemExit(f"  ✗ {pkg}=={version} 没有 win_amd64 wheel")
 
 

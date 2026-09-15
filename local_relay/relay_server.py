@@ -203,7 +203,8 @@ class Stats:
                 "offload": {
                     "count": handoff,
                     "rate": round(handoff / n, 4),
-                    "rate_pct": f"{100 * handoff / n:.1f}%",
+                    "rate_pct": round(100 * handoff / n, 1),  # 数值型百分比，便于程序化消费
+                    "rate_pct_str": f"{100 * handoff / n:.1f}%",  # 给人看的
                     "by_reason": {
                         "tag": self.reason_tag,
                         "limit": self.reason_limit,
@@ -215,8 +216,11 @@ class Stats:
                     "small": self.small_tokens,
                     "llm": self.llm_tokens,
                     "total": self.small_tokens + self.llm_tokens,
-                    "llm_share_pct": (
-                        f"{100 * self.llm_tokens / max(self.small_tokens + self.llm_tokens, 1):.1f}%"
+                    "llm_share": round(
+                        self.llm_tokens / max(self.small_tokens + self.llm_tokens, 1), 4
+                    ),
+                    "llm_share_pct": round(
+                        100 * self.llm_tokens / max(self.small_tokens + self.llm_tokens, 1), 1
                     ),
                 },
                 "latency_s": {

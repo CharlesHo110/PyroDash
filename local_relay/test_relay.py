@@ -154,10 +154,10 @@ def main() -> int:
         stats = requests.get(f"{args.base_url.rsplit('/v1', 1)[0]}/v1/stats", timeout=10).json()
         print(f"\n  服务端累计统计:")
         print(f"    总请求      {stats['total_requests']}")
-        print(f"    交接次数    {stats['offload']['count']}  ({stats['offload']['rate_pct']})")
+        print(f"    交接次数    {stats['offload']['count']}  ({stats['offload']['rate_pct_str']})")
         print(f"    分类        {json.dumps(stats['routes'], ensure_ascii=False)}")
         print(f"    token      小模型 {stats['tokens']['small']} / 大模型 {stats['tokens']['llm']}"
-              f"  (大模型占比 {stats['tokens']['llm_share_pct']})")
+              f"  (大模型占比 {stats['tokens']['llm_share_pct']:.1f}%)")
         print(f"    平均延迟    小模型 {stats['latency_s']['small_avg']}s / 大模型 {stats['latency_s']['llm_avg']}s")
     except Exception as exc:
         print(f"\n  (读统计失败: {exc})")
