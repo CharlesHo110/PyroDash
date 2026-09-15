@@ -250,10 +250,13 @@ def main() -> None:
 
     # ------------------------------------------------------------ 对比表
     if len(all_results) > 1:
-        base = all_results.get("pyrodash") or next(iter(all_results.values()))
+        # 以「纯大模型上限」为成本基准（全部直接调大模型的 token 量）：
+        # 相对成本 < 1 表示比全量直调大模型更省；> 1 表示反而更贵。
+        base = all_results.get("llm") or all_results.get("pyrodash") or next(iter(all_results.values()))
         base_remote = base["remote_tokens"] or 1
         print("\n" + "=" * 78)
         print(f"三组对照（{args.dataset}，{len(questions)} 题，tag={args.tag}）")
+        print(f"成本基准 = 臂 {base['arm']}（{base['remote_tokens']:,} 远端 token）")
         print("=" * 78)
         print(f"{'臂':<18}{'准确率':>10}{'offload率':>11}{'远端token':>12}{'相对成本':>10}{'小模型token':>13}")
         print("-" * 78)
@@ -269,8 +272,8 @@ def main() -> None:
                 f"{s['small_tokens']:>13,}"
             )
         print("=" * 78)
-        print("相对成本 = 该臂远端大模型 token / PyroDash 臂远端大模型 token（内网网关无计费，"
-              "token 量即对网关的压力）")
+        print("相对成本 = 该臂远端大模型 token / 纯大模型上限的 token；<1 表示比全量直调更省")
+        print("（内网网关无实际计费，token 量即对网关的压力）")
 
     combined = out_dir / f"{args.tag}_{args.dataset}_compare.json"
     with combined.open("w", encoding="utf-8") as f:

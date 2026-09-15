@@ -19,10 +19,38 @@ Offload:  5/5 (100.0%)
 配 `torch 2.7.1+cu118` —— 当前驱动 537.70（CUDA 12.2）即可直接用 GPU 跑 4B 模型。
 
 ```bash
-bash setup/06-run-windows-native.sh 5        # gsm8k 前 5 题冒烟
-bash setup/06-run-windows-native.sh --stop   # 用完停服务
-bash setup/06-run-windows-native.sh --full   # 全量（本机很慢，见下）
+bash setup/06-run-windows-native.sh 5             # gsm8k 前 5 题冒烟
+bash setup/06-run-windows-native.sh --compare 50  # 三组对照实验（§4 验证清单核心）
+bash setup/06-run-windows-native.sh --stop         # 用完停服务
+bash setup/06-run-windows-native.sh --full         # 全量（本机很慢，见下）
+
+# 换 λ 对照 checkpoint
+PYRODASH_MODEL=models/PyroDash-4B-GRPO-Lambda-0.6 \
+  bash setup/06-run-windows-native.sh --compare 50 --tag l06
 ```
+
+### 实测结论（GSM8K 前 50 题，同一批题，`deepseek-v4-pro`）
+
+| λ | 臂 | 准确率 | offload 率 | 远端 token | 相对成本 |
+|---|---|---|---|---|---|
+| λ=0.05 | 纯小模型下限 | 4.00% | 96.0% | 0 | 0.00x |
+| λ=0.05 | **PyroDash** | **98.00%** | 96.0% | 41,916 | **1.26x** |
+| λ=0.05 | 纯大模型上限 | 96.00% | — | 33,366 | 1.00x |
+| λ=0.6 | 纯小模型下限 | 90.00% | 2.0% | 0 | 0.00x |
+| λ=0.6 | **PyroDash** | **90.00%** | **0.0%** | **0** | **0.00x** |
+| λ=0.6 | 纯大模型上限 | 96.00% | — | 33,063 | 1.00x |
+
+**要点**：
+
+- λ 确实控制 offload 率：**96% → 0%**，远端成本跟着从 41,916 → **0**。
+- λ=0.05 在 GSM8K 上反而比全量直调大模型**更贵**（1.26x）：offload 率太高，
+  且每次接力都要把已产出的推理链当 prompt 前缀再发一遍，prompt token 重复消耗。
+- λ=0.6 在 GSM8K 上性价比最高：远端成本 0，准确率 90%（比纯大模型低 6 个点）。
+- λ=0.05 的 PyroDash 拿到 **98%**，反超纯大模型上限的 96%——本地已算对的部分
+  喂给大模型，反而减少它走偏。**offload 不只是省钱，也可能提升上限**。
+
+详细分析与复现命令见 `STATUS.md` 的「对照实验结果」。
+
 
 | | 路径 A：WSL2 + vLLM | **路径 B：Windows 原生** |
 |---|---|---|
@@ -170,11 +198,14 @@ bash /mnt/d/hecan/PyroDash/setup/04-run-math-eval.sh gsm8k math amc minerva olym
 
 | 脚本 | 运行位置 | 作用 |
 |---|---|---|
-| **`06-run-windows-native.sh`** | Windows / Git Bash | ★ 一键：自检 + 起小模型服务 + 跑评测（`--stop` 停服务，`--full` 跑全量） |
+| **`06-run-windows-native.sh`** | Windows / Git Bash | ★ 一键：自检 + 起小模型服务 + 跑评测（`--stop` 停服务，`--full` 跑全量，`--compare N` 跑三组对照） |
 | **`serve_small.py`** | Windows | ★ OpenAI 兼容服务，替代 vLLM。支持 `include_stop_str_in_output` / `skip_special_tokens` / `stop` 等 vLLM 专有语义 |
 | **`smoke_offload.py`** | Windows | ★ 小样本冒烟：只裁数据集条数，其余复用上游真实 relay 全链路 |
+| **`compare_arms.py`** | Windows | ★ 三组对照实验（纯小模型下限 / PyroDash / 纯大模型上限），输出 accuracy + offload 率 + 远端 token |
 | `download_model.py` | 任意 | 跨平台下载器（ModelScope/HF 双源、断点续传、大小+token 校验） |
 | `prefetch_datasets.py` | Windows | 预取 7 个数据集原始文件 + 记录 sha |
+
+环境变量（都可覆盖）：`PYRODASH_MODEL`（切 checkpoint）、`SMALL_TIMEOUT`（小模型单请求超时秒数，默认 3600）、`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`。
 
 ### 路径 A（WSL2 + vLLM）—— 需管理员
 
