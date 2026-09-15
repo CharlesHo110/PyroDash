@@ -1,0 +1,8 @@
+# setup/ 目录下体积大或可再生的产物，不入库
+hf_home/
+driver/
+datasets/
+.venv-win/
+*.log
+*.err
+__pycache__/

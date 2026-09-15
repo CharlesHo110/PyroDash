@@ -106,11 +106,21 @@ def verify_boxed(gt_boxed: str, pred_boxed: str) -> bool:
         return False
     try:
         # Re-wrap as \boxed{} so math_verify uses the same path as full-text parsing.
-        # parsing_timeout=None: safe inside ThreadPoolExecutor (no signal.alarm)
-        return math_verify.verify(
-            _parse_boxed_content(gt_boxed),
-            _parse_boxed_content(pred_boxed),
-        )
+        # parsing_timeout=None / timeout_seconds=None: 关闭 math_verify 内部基于
+        # 子进程（multiprocessing/signal）的超时机制。Windows 上该机制必然失败
+        # （OSError WinError 6 句柄无效），会让 verify() 无条件返回 False —— 即所有
+        # 评测准确率恒为 0。原作者只对 parse 传了 None，verify 漏了。
+        try:
+            return math_verify.verify(
+                _parse_boxed_content(gt_boxed),
+                _parse_boxed_content(pred_boxed),
+                timeout_seconds=None,
+            )
+        except TypeError:  # 旧版 math_verify 无 timeout_seconds 参数
+            return math_verify.verify(
+                _parse_boxed_content(gt_boxed),
+                _parse_boxed_content(pred_boxed),
+            )
     except Exception:
         return False
 

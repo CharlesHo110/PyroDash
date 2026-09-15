@@ -220,3 +220,10 @@ __marimo__/
 
 # Evaluation outputs
 evaluation/evaluation_code/output/
+
+# 本地部署产物（体积大，勿入库）
+models/
+results/
+results_500/
+results_smoke*/
+vllm_serve.log

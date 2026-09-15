@@ -1,0 +1,43 @@
+# PyroDash 数学评测依赖子集（在 WSL 里安装）
+#
+# 为什么不用上游 requirements.txt 直接装：
+#   上游文件里还含 coding/agentic 评测依赖（swebench / mini-swe-agent / docker / aiohttp），
+#   体积大、易装失败，且与本次「本地小模型 + 远端大模型跑数学评测」目标无关。
+#   本文件保留了上游全部 pin，仅剔除上述 coding 依赖。
+#
+# 已核实的版本对应关系（来自 PyPI 官方元数据）：
+#   upstream pin (torch==2.11.0, torchaudio==2.11.0, torchvision==0.26.0) 与
+#   vllm 0.25.1 声明的依赖完全一致：
+#       vllm 0.25.1 -> torch==2.11.0, torchaudio==2.11.0, torchvision==0.26.0,
+#                      torchcodec>=0.14, transformers>=5.5.3
+#   因此这里把 vllm 固定为 0.25.1（若写 >=0.25.1，pip 会选 0.29.0，它要求 torch==2.13.0，与 pin 冲突）。
+#
+# 🔴 驱动要求：torch 2.11.0 是 CUDA 13 构建（依赖 nvidia-cudnn-cu13 / nvidia-nccl-cu13），
+#    CUDA 13.0 GA 官方要求驱动 >= 580.65.06（WSL2 用 Windows 驱动，故 Windows 驱动需 >= 580）。
+#    当前机器驱动 537.70（CUDA 12.2）不满足，必须先升级驱动（已预下载 616.92）。
+#
+# 可用性已核实（清华 pypi 镜像，2026-09-15）：
+#   vllm-0.25.1-cp38-abi3-manylinux_2_28_x86_64.whl
+#   torch-2.11.0-cp312-cp312-manylinux_2_28_x86_64.whl
+#   torchvision-0.26.0 / torchaudio-2.11.0 (cp312)
+#   transformers-5.5.3-py3-none-any.whl
+#
+# datasets 固定为 5.0.1：setup/hf_home 这份预置离线缓存就是用该版本生成的，
+# 版本一致可确保 arrow 缓存指纹匹配、直接离线复用（避免评测时联网拉数据集）。
+
+vllm==0.25.1
+torch==2.11.0
+torchaudio==2.11.0
+torchvision==0.26.0
+transformers>=5.5.3
+huggingface-hub>=0.30.0
+accelerate>=1.0.0
+datasets==5.0.1
+math-verify
+mathruler
+pylatexenc
+requests
+tqdm
+pandas
+openai>=1.40.0
+httpx>=0.27.0
