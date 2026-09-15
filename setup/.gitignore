@@ -9,3 +9,12 @@ __pycache__/
 
 # 本地密钥文件（绝不入库）
 .llm_key
+
+# llama.cpp 预编译二进制（~645MB，见 07-install-llama.sh）
+llama.cpp/
+
+# gguf 模型权重
+*.gguf
+
+# 临时工作区（探针脚本、日志、下载缓存）
+_t/
