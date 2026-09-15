@@ -191,3 +191,37 @@ bash setup/06-run-windows-native.sh --stop     # 用完停服务
 | offload token 触发 | ✅ AIME 难题 39 tok 后触发 |
 | 端到端评测 | ✅ gsm8k 100%（5/5），offload 100%，退出码 0 |
 | 系统 Python torch 已还原 | ✅ 2.7.1+cu118 |
+| 一键脚本热启动跑评测 | ✅ gsm8k 100%（2/2），参数透传正常 |
+| **一键脚本冷启动跑评测** | ✅ 自动拉起服务（等待 25s）→ gsm8k 100%（3/3），全程 1m30s，退出码 0 |
+
+## 冷启动耗时实测
+
+```
+[stop]  停止小模型服务（模拟冷启动）
+[serve] 启动小模型服务（加载 8.45GB 权重）...
+[serve] ✅ 就绪（等待 25 秒）
+[run]   smoke_offload.py --dataset gsm8k --limit 3 --max-tokens 2500
+  Dataset:  gsm8k
+  Accuracy: 100.00% (3/3)
+  Offload:  3/3 (100.0%)
+总耗时: 1m29.7s   退出码: 0
+```
+
+## 提交记录（本地，未能推送）
+
+上游 `github.com/PyroMind-Dynamics/PyroDash` 是**第三方仓库**，推送返回 403：
+
+```
+remote: Permission to PyroMind-Dynamics/PyroDash.git denied to CharlesHo110.
+fatal: unable to access ...: The requested URL returned error: 403
+```
+
+因此以下 3 个提交保留在本地 `main`：
+
+| commit | 内容 |
+|---|---|
+| `42c97c2` | 新增 Windows 原生部署路径（serve_small.py / smoke_offload.py / 06 脚本）+ 修复 math_verify 打分 bug |
+| `98d98d6` | 新增 .gitattributes 固定行尾（防 shell 脚本被检出成 CRLF） |
+| `08e14dd` | 修复 06 脚本：数字参数会吞掉后续选项 |
+
+> 如需备份，可另加自己的 remote：`git remote add mine <你的仓库>` 后 `git push mine main`。
