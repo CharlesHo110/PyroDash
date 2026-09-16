@@ -473,3 +473,69 @@ fatal: unable to access ...: The requested URL returned error: 403
 | `08e14dd` | 修复 06 脚本：数字参数会吞掉后续选项 |
 
 > 如需备份，可另加自己的 remote：`git remote add mine <你的仓库>` 后 `git push mine main`。
+
+---
+
+## 后续：本机中转（`local_relay/`）—— 从「能跑评测」到「日常能用」
+
+上面这套是在**跑论文评测**。之后的目标变成「让 PyroDash 的思路在本人机器上真的能用」，
+也就是「本机小模型 + 远端大模型」当作一个 OpenAI 兼容服务挂给 pi 用。这部分落在
+`local_relay/`，详细文档见 `local_relay/README.md`，这里只记结论和踩过的坑。
+
+### 1. GPU 启用（10.2 → 92 tok/s）
+
+| 项 | 结果 |
+|---|---|
+| 设备 | RTX 3060 12GB，compute capability 8.6（Ampere），驱动 537.70 |
+| CPU 推理 | 9.6 – 10.2 tok/s |
+| **GPU 推理** | **87.5 – 92 tok/s（约 9 倍）** |
+| prompt 吞吐 | 800 – 949 tok/s |
+| 带宽上限 | ≈ 360 GB/s ÷ 2.33 GB ≈ **154 tok/s**（已用到理论值的 ~57%） |
+
+坑：**这个 llama.cpp 构建即使 GPU 生效也不会在日志里打 CUDA 行。** 判设备位置只能靠
+`llama-server.exe --list-devices`（→ `CUDA0: NVIDIA GeForce RTX 3060`）或吞吐量。
+另外缺 DLL 时它会**静默回退 CPU**：服务照常启动、`/health` 照常 200、照常返回结果，
+只是慢 9 倍。
+
+CUDA DLL 取自清华 PyPI 的 wheel（5.07 MB/s），没用 GitHub 上那个 391 MB 的 zip（106 KB/s）。
+注意 `07b-fetch-cudart.py` 有个坑：PyPI JSON 里的 `url` 指向官方 CDN，必须替换**主机名**，
+不能拼接路径。
+
+### 2. 路由策略：小模型做「工具 + 日常事务」，分析类直接上大模型
+
+见 `local_relay/README.md` §1.1。三层判定（显式声明 > `tools` 存在 > 关键词/长度），
+9 个用例全部符合预期；工具调用现在由本机 4B 自己产出（实测 `get_weather({"city":"北京"})`）。
+
+### 3. 远端模型：`deepseek-v4-flash` + 关掉思考
+
+内网网关（`ai-api.bj.tkoffice.cn`，36 个模型）只认 **`thinking: {"type": "disabled"}`**；
+relay 原本继承自 `_call_dashscope_chat` 的 `chat_template_kwargs.enable_thinking`
+被网关**静默忽略**，所以 `LLM_ENABLE_THINKING` 一直没起作用。
+
+两个模型开着思考时都会把 2048 预算全烧在 reasoning 上、正文 0 字被截断；
+关掉后 flash 8.0s / pro 25.3s 正常答完，因此默认 `LLM_ENABLE_THINKING=0`。
+同题同预算 flash 比 pro 快 2–3 倍。
+
+### 4. 修掉的三个 bug（都会静默出错）
+
+| # | 位置 | 症状 | 修法 |
+|---|---|---|---|
+| 1 | `relay_server.py` 取 temperature | `float(body.get("temperature") or ...)` 把 `temperature=0.0` 当成 falsy 而换成 0.6，**确定性测试全是假的** | 改 `is not None` 判断 |
+| 2 | `_finish_reason` | 恒返回 `stop`（`tool_calls` 除外），**所有截断被静默掩盖**；流式分支又硬编码一遍 `stop` | 按 route / `small_stop_type` / `llm_finish` 如实上报 `length`；流式路径透传真实值 |
+| 3 | 大模型腿预算 | 共享预算下 `llm_tokens=0` 却报 `stop` | 独立预算（`SHARED_BUDGET=0`）+ 预算耗尽显式标 `handoff:budget-exhausted` |
+
+顺带把 `_sse()` 补上 `delta.tool_calls` + `finish_reason: "tool_calls"`。
+**漏了这一步会让 pi 的工具调用在流式下静默失效**（pi 默认就是流式 + 工具）。
+
+### 5. 官方 WSL2 路径仍未做
+
+需要管理员权限 + UAC（装驱动 616.92 后重启），命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File D:\hecan\PyroDash\setup\01-enable-wsl.ps1
+```
+
+之后 `02 → 05 → 04`。**目前的工作路径不依赖它**；只有要跑全量 vLLM 评测才需要。
+另外：**不建议为了这个项目升级驱动/CUDA**（537.70 已满足 CUDA 12.x 的 minor 兼容，
+RTX 3060 的 sm_86 有原生 cubin，升级只带来百分之几）。
+

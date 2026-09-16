@@ -17,14 +17,14 @@ PyroDash 的核心思想是**token 级的两级协作**：一个跑在本机的�
    │  · 判定「本机搞定」还是「交接」           │
    └──────────┬───────────────────┬───────┘
               │                   │
-   答得完 ────┘                   └──── 答不完 / 带 tools
-              │                            │
-              ▼                            ▼
-   ┌────────────────────┐      ┌──────────────────────────┐
-   │ llama-server :8080 │      │ deepseek-v4-pro (远端)    │
-   │ Qwen3-4B  Q4_K_M   │      │ 收到半截推理，接着写        │
-   │ 2.33 GB / 12GB 显存 │      │ 共享预算：总预算 − 小模型已用 │
-   └────────────────────┘      └──────────────────────────┘
+  答得完 ────┘                   └──── 答不完 / 分析类 / 带 tools
+             │                            │
+             ▼                            ▼
+  ┌─────────────────────┐      ┌──────────────────────────┐
+  │ llama-server :8080  │      │ deepseek-v4-flash (远端)   │
+  │ Qwen3-4B  Q4_K_M    │      │ 收到半截推理，接着写        │
+  │ 2.33 GB / 12GB 显存  │      │ 独立预算：客户端给的完整预算 │
+  └─────────────────────┘      └──────────────────────────┘
 ```
 
 ---
@@ -35,11 +35,12 @@ PyroDash 的核心思想是**token 级的两级协作**：一个跑在本机的�
 
 | 场景 | 结果 |
 |------|------|
-| 翻译 / 算术 / 总结 / 格式转换 | `route=small`，**本机 0.04 – 0.55 秒**答完，大模型 0 token |
+| 翻译 / 算术 / 总结 / 格式转换 | `route=small`，**本机 0.16 – 0.32 秒**答完，大模型 0 token |
 | 多步推理 / 长代码 / 领域知识 | `route=handoff:limit`，本机给 512 token 半截推理 → 大模型接力 |
-| 带 `tools` 的请求（pi 的工具调用） | `route=handoff:tools`，**完全跳过小模型**，`tool_calls` 原样透传（流式与非流式都验证过） |
-| 路由是否准确 | **7/7 全部符合预期** |
-| 大模型 token 占比 | 74.3%（总 6203 token 里 4608 给大模型） |
+| **分析类任务**（「分析一下…」「explain why…」、超长需求） | `route=handoff:analysis`，**直接跳过小模型**，本机 0 token（实测 2.8 – 6.1 秒） |
+| **带 `tools` 的请求**（pi 的工具调用） | `route=small`，**小模型自己产出 `tool_calls`**（实测 `get_weather({"city":"北京"})`）；给不出就 `handoff:tools-fallback` |
+| 显式 `x-pyrodash-task` | 完全按声明走：`routine`→本机先试；`analysis`→直连云端；`tool`→小模型执行 |
+| 路由是否准确 | **9/9 全部符合预期** |
 
 **必须知道的坑（这是最重要的一条）**：
 
@@ -60,7 +61,44 @@ PyroDash 的核心思想是**token 级的两级协作**：一个跑在本机的�
 这就是这个系统唯一的、也是最有效的旋钮。
 
 > 顺带一个意外收益：这个机制天然按「任务长度」分流——本机能短平快解决的就本机解决，
-> 需要长篇展开的自动流向大模型。不需要任何分类器。
+> 需要长篇展开的自动流向大模型。
+
+### 1.1 路由策略：小模型做「工具 + 日常事务」，分析类直接上大模型
+
+上面那个「按长度自动分流」是**机械触发**的。后来我们又往它上面加了一层**任务分类**，
+因为一条实测结论：**分析类任务不该给小模型试。**
+
+理由很直接：分析类任务（推理、证明、权衡、架构、调试）几乎必然会被 512 预算截断，
+那次尝试的唯一产出是一段**被丢弃的半截推理**——本机算力白烧，还多花 1–6 秒。
+旧版共享预算下它还会挤占大模型腿的额度。
+
+所以现在是三分：
+
+| 任务类型 | 判据 | 路由 |
+|---|---|---|
+| `tool` | 请求带 `tools` | **小模型自己执行**（llama.cpp `--jinja` 渲染工具模板并解析 `tool_calls`）；
+给不出可用调用则回退大模型 `handoff:tools-fallback` |
+| `routine` | 翻译/格式化/提取/总结/改写等关键词；或长度 < `ANALYSIS_MIN_CHARS` | 小模型先答，预算内答完就本机搞定，否则 `handoff:limit` |
+| `analysis` | 分析/推理/证明/对比/架构/调试等关键词；或长度 ≥ `ANALYSIS_MIN_CHARS`（默认 400） | **直接 `handoff:analysis` 交大模型**，本机 0 token |
+
+判定优先级从高到低：
+
+1. **客户端显式声明** —— body 里的 `pyrodash_task`，或 HTTP header `x-pyrodash-task`
+   （值 `tool` / `routine` / `analysis`）。**这是唯一权威信号**，只有调用方知道自己要什么。
+   body 里的值优先于 header。
+2. 请求带 `tools` → `tool`。
+3. 关键词 / 长度启发式 → `analysis` 或 `routine`。
+4. 全没命中 → `UNKNOWN_TASK`（默认 `routine`）。
+
+> **启发式一定会判错。** 所以它的作用被刻意限制为「决定要不要让小模型先试一下」：
+> 判成 `analysis` 只是跳过本机尝试（最多多花几秒云端时间），判成 `routine` 也只是让本机
+> 试一次、答不完照样交接。**判错的最坏结果是一次多余的本地尝试，不会产出错误答案。**
+> 要精确控制就用第 1 条显式声明。
+
+另外一个反直觉的点：**工具调用不但不该跳过大模型，反而是小模型最适合干的活。**
+早期版本把带 `tools` 的请求直接透传云端（`handoff:tools`），理由是「4B 做不了工具编排」；
+实测下来 4B 在 `--jinja` 下能稳定产出正确的 `tool_calls`，而工具选择本来就不需要深度推理。
+现在工具验证交本机、真正的分析交云端，边界更合理。
 
 ---
 
@@ -134,7 +172,7 @@ python local_relay/test_relay.py --ask "帮我把这段正则改成 Python re �
       "models": [
         {
           "id": "pyrodash-local",
-          "name": "PyroDash 本机中转 (Qwen3-4B → deepseek-v4-pro)",
+          "name": "PyroDash 本机中转 (Qwen3-4B → deepseek-v4-flash)",
           "contextWindow": 16384,
           "maxTokens": 4096,
           "input": ["text"]
@@ -172,17 +210,21 @@ curl http://127.0.0.1:8010/v1/chat/completions \
     "route": "handoff:limit",
     "offload_reason": "limit",
     "offloaded": true,
+    "task": "routine",
+    "task_source": "declared",
     "small_model": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
     "small_tokens": 512,
     "small_stop_type": "limit",
-    "small_elapsed_s": 5.6,
-    "llm_model": "deepseek-v4-pro",
-    "llm_tokens": 1536,
-    "llm_elapsed_s": 28.7,
+    "small_elapsed_s": 4.3,
+    "llm_model": "deepseek-v4-flash",
+    "llm_tokens": 752,
+    "llm_elapsed_s": 10.6,
     "total_budget": 2048,
-    "budget_used": 2048,
+    "llm_budget": 2048,
+    "budget_used": 1264,
     "tools_passthrough": false,
-    "tool_calls": 0
+    "tool_calls": 0,
+    "tool_calls_from": null
   }
 }
 ```
@@ -191,11 +233,12 @@ curl http://127.0.0.1:8010/v1/chat/completions \
 
 | 值 | 含义 |
 |----|------|
-| `small` | 本机搞定，大模型 0 token（**省钱的就是这种**，实测 0.04 – 0.55 秒） |
+| `small` | 本机搞定，大模型 0 token。含两种：事务性任务本机答完，**或工具调用由本机小模型产出** |
+| `handoff:limit` | 小模型预算内没答完 → 交接（`routine` 的主力路径） |
+| `handoff:analysis` | 判定为分析类任务，**小模型完全不参与**，直接转大模型 |
+| `handoff:tools-fallback` | 带 `tools` 但小模型没给出可用 `tool_calls` → 回退大模型 |
 | `handoff:tag` | 小模型主动吐了交接标记（训练过的模型才常见） |
-| `handoff:limit` | 小模型预算内没答完 → 交接（**当前主力路径**） |
-| `handoff:tools` | 请求带 `tools`，直接跳过大模型（小模型做不了工具编排） |
-| `handoff:budget-exhausted` | 小模型就吃光了全部预算，大模型没得用（调小 `SMALL_MAX_TOKENS` 可避免） |
+| `handoff:budget-exhausted` | 小模型吃光了全部预算，大模型没得用（**只在 `SHARED_BUDGET=1` 下可能出现**） |
 
 累计统计：
 
@@ -227,11 +270,68 @@ curl -s http://127.0.0.1:8010/health
 | `SMALL_BASE_URL` | `http://127.0.0.1:8080` | llama-server 地址 |
 | `SMALL_MODEL` | 自动探测 | 留空则从 `/props` 读模型名 |
 | `LLM_BASE_URL` | `https://ai-api.bj.tkoffice.cn/v1` | 远端大模型 |
-| `LLM_MODEL` | `deepseek-v4-pro` | 远端模型名 |
+| `LLM_MODEL` | `deepseek-v4-flash` | 远端模型名 |
 | `LLM_API_KEY` | 读 `setup/.llm_key` | **密钥只在本地文件/环境变量里，绝不进仓库** |
-| `DEFAULT_MAX_TOKENS` | `2048` | 共享总预算（客户端传 `max_tokens` 可覆盖） |
+| `LLM_ENABLE_THINKING` | `0` | 远端模型是否开思考。**默认关**，原因见下 |
+| `DEFAULT_MAX_TOKENS` | `2048` | 默认总预算（客户端传 `max_tokens` 可覆盖） |
+| `SHARED_BUDGET` | `0` | **`0`=两腿各自独立预算**（小模型花的不占云端额度）；`1`=旧行为「总预算 − 小模型已用」 |
+| `LLM_MAX_TOKENS` | `0` | 大模型腿单独预算；`0` 表示就用客户端的 `max_tokens` |
+| `ANALYSIS_MIN_CHARS` | `400` | 超过这个字符数就判为分析类任务 |
+| `UNKNOWN_TASK` | `routine` | 启发式全没命中时的兜底任务类型 |
 | `OFFLOAD_ON_LIMIT` | `1` | 是否把「预算内没答完」当作交接信号（关掉就只剩模型主动标记这条） |
 | `TEMPERATURE` | `0.6` | 采样温度 |
+
+### 5.1 为什么默认换成 `deepseek-v4-flash`，以及为什么要把思考关掉
+
+这两个决定是连在一起的，而且都是实测出来的。
+
+**先把结论摆上**（同一道分析题，`max_tokens=2048`，`temperature=0`）：
+
+| 模型 | 传参方式 | finish | 输出 tok | 思考字符 | 正文字符 | 耗时 |
+|---|---|---|---|---|---|---|
+| `deepseek-v4-pro` | 不传 | `length` | 2048 | 3757 | **0** | 47.5s |
+| `deepseek-v4-pro` | `chat_template_kwargs.enable_thinking=false` | `length` | 2047 | 3759 | **0** | 42.3s |
+| `deepseek-v4-pro` | `thinking={"type":"disabled"}` | `stop` | 1400 | 0 | 2636 | **25.3s** |
+| `deepseek-v4-flash` | 不传 | `length` | 2048 | 3705 | **0** | 15.1s |
+| `deepseek-v4-flash` | `chat_template_kwargs.enable_thinking=false` | `length` | 2048 | 7805 | **0** | 21.2s |
+| `deepseek-v4-flash` | `thinking={"type":"disabled"}` | `stop` | 1298 | 0 | 2650 | **8.0s** |
+
+两个坑：
+
+**坑一：`chat_template_kwargs.enable_thinking` 是无效的。** relay 原本用的就是它
+（继承自 PyroDash 的 `_call_dashscope_chat`），实测内网网关**静默忽略**这个参数，
+`enable_thinking` 无论真假都不管用（传 `false` 时 flash 的思考反而涨到 7805 字符）。
+网关只认 **`thinking: {"type": "disabled"}`**。这是已经修掉的 bug——
+在那之前 `LLM_ENABLE_THINKING` 一直是个摆设。
+
+**坑二：这两个模型的思考都远超 2048 预算。** 开着思考时，它们会把全部预算烧在
+reasoning 上、正文一字未出就被截断（表里那些「正文 0 字符」就是），而且 `finish_reason`
+会被报成 `length`——这是另一处已修的 bug（旧版恒报 `stop`，把截断静默掩盖了）。
+所以**默认关思考**是必须的：关了之后 flash 8.0s / pro 25.3s 就能正常答完。
+
+**那为什么选 flash？** 同预算同题目下 flash 比 pro 快 2–3 倍（8.0s vs 25.3s），
+单位 token 吞吐也高大约一倍。代价是 flash 的思考更长（3705 vs 3757 字符，同量级）。
+要开思考就得同时把预算抬到 ≥8192（实测 flash 需要 ~6240 tok 才答完）。
+
+```bash
+# 想开思考：必须同时给更大预算，否则 100% 被截断
+LLM_ENABLE_THINKING=1 LLM_MAX_TOKENS=8192 bash local_relay/run.sh
+```
+
+### 5.2 独立预算：为什么不再从总预算里扣小模型的
+
+旧行为（`SHARED_BUDGET=1`）沿用 PyroDash 的 `_llm_max_tokens`：大模型只能用
+「客户端总预算 − 小模型已用」。小模型先花掉 512，云端就只剩 1536，
+而开着思考的模型写不完推理+代码就被 `length` 截断。
+
+实测证据（`HumanEval/130`）：
+
+- 共享预算 2048 → 云端只拿到 1536 → **失败**
+- 总预算 8192 → 云端拿到 2157 → **通过**
+
+小模型的 token 是本机算的、不花钱，没有理由去占客户端付钱的远端额度。
+所以默认 `SHARED_BUDGET=0`：两腿各自独立，云端直接拿客户端给的完整 `max_tokens`。
+要复现论文里那种「总预算约束」，把 `SHARED_BUDGET` 设回 `1` 即可。
 | `PYRODASH_OFFLOAD_TAG` | `<\|llm_offload\|>` | 交接标记文本 |
 | `PYRODASH_PROTOCOL_FILE` | 内置 | 换成你自己的协议提示词文件 |
 

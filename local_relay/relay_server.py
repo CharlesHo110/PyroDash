@@ -124,12 +124,24 @@ CONFIG = {
     "small_max_tokens": _env_int("SMALL_MAX_TOKENS", 512),
     "llm_base_url": _env("LLM_BASE_URL", "https://ai-api.bj.tkoffice.cn/v1").rstrip("/"),
     "llm_api_key": _resolve_llm_key(),
-    "llm_model": _env("LLM_MODEL", "deepseek-v4-pro"),
+    "llm_model": _env("LLM_MODEL", "deepseek-v4-flash"),
     "llm_timeout": _env_int("LLM_TIMEOUT", 600),
-    "llm_enable_thinking": _env_bool("LLM_ENABLE_THINKING", True),
+    "llm_enable_thinking": _env_bool("LLM_ENABLE_THINKING", False),
     "default_max_tokens": _env_int("DEFAULT_MAX_TOKENS", 2048),
     "offload_on_limit": _env_bool("OFFLOAD_ON_LIMIT", True),
     "temperature": float(_env("TEMPERATURE", "0.6")),
+    # ---- 路由策略：小模型只负责「工具执行 + 日常事务」，分析类任务不交给它 ----
+    # 客户端可用 body.pyrodash_task 或 header x-pyrodash-task 显式声明
+    # （tool / routine / analysis），这是唯一权威的信号。没声明时按下面的规则判定。
+    "unknown_task": _env("UNKNOWN_TASK", "routine"),         # 判不出时默认按事务处理
+    "analysis_min_chars": _env_int("ANALYSIS_MIN_CHARS", 400),  # 长请求一律当分析
+    # ---- 大模型腿的预算 ----
+    # 旧行为（shared_budget=True）：大模型只能用 total_budget - 小模型已用额度，
+    #   小模型花掉 512 后剩下的常常不够让开 thinking 的模型写完，被 length 截断。
+    # 默认（False）：给大模型**独立**的完整预算——小模型的 token 是本机算的、
+    #   不花钱，没有理由去占客户端付钱的远端预算。
+    "shared_budget": _env_bool("SHARED_BUDGET", False),
+    "llm_max_tokens": _env_int("LLM_MAX_TOKENS", 0),          # 0 = 用客户端给的 total_budget
 }
 
 
@@ -145,21 +157,27 @@ class Stats:
         self.reset()
 
     def reset(self) -> None:
-        with getattr(self, "_lock", threading.Lock()):
+        with self._lock:
             self.total = 0
             self.route_small = 0
             self.route_handoff = 0
             self.reason_tag = 0
             self.reason_limit = 0
             self.reason_budget_exhausted = 0
-            self.reason_tools = 0
+            self.reason_analysis = 0
+            self.reason_tools_fallback = 0
             self.routes = {
                 "small": 0,
                 "handoff:tag": 0,
                 "handoff:limit": 0,
                 "handoff:budget-exhausted": 0,
-                "handoff:tools": 0,
+                "handoff:analysis": 0,
+                "handoff:tools-fallback": 0,
             }
+            # 任务类型分布（tool / routine / analysis）——看路由策略实际生效情况
+            self.tasks: dict[str, int] = {"tool": 0, "routine": 0, "analysis": 0}
+            self.tool_calls_small = 0
+            self.tool_calls_llm = 0
             self.small_tokens = 0
             self.llm_tokens = 0
             self.small_seconds = 0.0
@@ -182,8 +200,17 @@ class Stats:
                     self.reason_limit += 1
                 elif route == "handoff:budget-exhausted":
                     self.reason_budget_exhausted += 1
-                elif route == "handoff:tools":
-                    self.reason_tools += 1
+                elif route == "handoff:analysis":
+                    self.reason_analysis += 1
+                elif route == "handoff:tools-fallback":
+                    self.reason_tools_fallback += 1
+            task = rec["pyrodash"].get("task") or "?"
+            self.tasks[task] = self.tasks.get(task, 0) + 1
+            _src = rec["pyrodash"].get("tool_calls_from")
+            if _src == "small":
+                self.tool_calls_small += 1
+            elif _src == "llm":
+                self.tool_calls_llm += 1
             self.small_tokens += rec["pyrodash"].get("small_tokens", 0) or 0
             self.llm_tokens += rec["pyrodash"].get("llm_tokens", 0) or 0
             self.small_seconds += rec["pyrodash"].get("small_elapsed_s", 0.0) or 0.0
@@ -195,6 +222,7 @@ class Stats:
             self._recent.append(
                 {
                     "route": route or "-",
+                    "task": rec["pyrodash"].get("task"),
                     "llm_model": rec["pyrodash"].get("llm_model"),
                     "small_tokens": rec["pyrodash"].get("small_tokens", 0),
                     "llm_tokens": rec["pyrodash"].get("llm_tokens", 0),
@@ -213,6 +241,7 @@ class Stats:
             return {
                 "total_requests": total,
                 "routes": dict(self.routes),
+                "tasks": dict(self.tasks),
                 "offload": {
                     "count": handoff,
                     "rate": round(handoff / n, 4),
@@ -222,8 +251,14 @@ class Stats:
                         "tag": self.reason_tag,
                         "limit": self.reason_limit,
                         "budget-exhausted": self.reason_budget_exhausted,
-                        "tools": self.reason_tools,
+                        "analysis": self.reason_analysis,
+                        "tools-fallback": self.reason_tools_fallback,
                     },
+                },
+                "tool_calls": {
+                    "total": self.tool_calls_small + self.tool_calls_llm,
+                    "by_small": self.tool_calls_small,  # 小模型自己完成的工具调用
+                    "by_llm": self.tool_calls_llm,      # 小模型没做成、回退给大模型的
                 },
                 "tokens": {
                     "small": self.small_tokens,
@@ -303,6 +338,67 @@ def call_small(
     }
 
 
+def call_small_chat(
+    messages: list[dict],
+    *,
+    tools: list[dict],
+    tool_choice: Any = None,
+    max_tokens: int,
+    temperature: float,
+) -> dict[str, Any]:
+    """让小模型自己执行工具调用——走 llama-server 的 /v1/chat/completions。
+
+    为什么这次换端点：``--jinja`` 下的 chat 端点会按模型自带的工具调用模板
+    渲染 prompt，并把模型吐出的 tool_call 文本解析成结构化 ``tool_calls``。
+    自己在 /completion 上拼工具模板既容易错、还得跟着模型版本维护。
+
+    返回 dict；``tool_calls`` 为空表示小模型没给出可用的工具调用，调用方
+    （chat_completion）据此回退给大模型——**不能静默失败**。
+    """
+    payload: dict[str, Any] = {
+        "model": CONFIG["small_model"] or "local",
+        "messages": messages,
+        "max_tokens": int(max_tokens),
+        "temperature": temperature,
+        "stream": False,
+    }
+    if tools:
+        payload["tools"] = tools
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
+
+    t0 = time.time()
+    resp = requests.post(
+        f"{CONFIG['small_base_url']}/v1/chat/completions",
+        json=payload,
+        timeout=CONFIG["small_timeout"],
+    )
+    elapsed = time.time() - t0
+    if resp.status_code >= 400:
+        return {
+            "content": "",
+            "think": "",
+            "tool_calls": [],
+            "finish_reason": "",
+            "tokens": 0,
+            "elapsed_s": round(elapsed, 3),
+            "error": f"HTTP {resp.status_code} {resp.text[:200]}",
+        }
+    data = resp.json()
+    choice = (data.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
+    usage = data.get("usage") or {}
+    return {
+        "content": str(msg.get("content") or ""),
+        "think": str(msg.get("reasoning_content") or ""),
+        "tool_calls": list(msg.get("tool_calls") or []),
+        "finish_reason": str(choice.get("finish_reason") or ""),
+        "tokens": int(usage.get("completion_tokens") or 0),
+        "elapsed_s": round(elapsed, 3),
+        "error": "",
+    }
+
+
 # ------------------------------------------------------------- 远端接力调用
 
 
@@ -312,7 +408,7 @@ def _call_llm_with_tools(
     max_tokens: int,
     tools: list[dict],
     tool_choice: Any = None,
-) -> tuple[str, str, list[dict], dict[str, Any] | None]:
+) -> tuple[str, str, list[dict], dict[str, Any] | None, str]:
     """带工具透传的远端调用，返回 (content, think, tool_calls, usage)。
 
     PyroDash 原有的 ``_call_dashscope_chat`` 不带 tools，所以这里单独实现；
@@ -326,6 +422,10 @@ def _call_llm_with_tools(
     }
     if tool_choice:
         payload["tool_choice"] = tool_choice
+    if not CONFIG["llm_enable_thinking"]:
+        # 同 _call_dashscope_chat：内网网关只认 thinking={"type":"disabled"}，
+        # 不传就默认开思考，2048 预算下会被 length 截断。
+        payload["thinking"] = {"type": "disabled"}
 
     resp = requests.post(
         f"{CONFIG['llm_base_url']}/chat/completions",
@@ -337,12 +437,19 @@ def _call_llm_with_tools(
         timeout=float(CONFIG["llm_timeout"]),
     )
     if resp.status_code >= 400:
-        return f"[Error: HTTP {resp.status_code} {resp.text[:200]}]", "", [], None
+        return f"[Error: HTTP {resp.status_code} {resp.text[:200]}]", "", [], None, ""
     data = resp.json()
-    msg = (data.get("choices") or [{}])[0].get("message") or {}
+    choice = (data.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
     content = str(msg.get("content") or "")
     think = str(msg.get("reasoning_content") or "")
-    return content, think, list(msg.get("tool_calls") or []), data.get("usage")
+    return (
+        content,
+        think,
+        list(msg.get("tool_calls") or []),
+        data.get("usage"),
+        str(choice.get("finish_reason") or ""),
+    )
 
 
 def handoff(
@@ -352,7 +459,7 @@ def handoff(
     max_tokens: int,
     tools: list[dict] | None = None,
     tool_choice: Any = None,
-) -> tuple[str, str, dict[str, Any] | None, float, str, list[dict]]:
+) -> tuple[str, str, dict[str, Any] | None, float, str, list[dict], str]:
     """把小模型的半截推理接力给远端大模型。
 
     返回 (答案, 思考, usage, 耗时, 错误, tool_calls)。
@@ -362,14 +469,15 @@ def handoff(
     system prompt。
     """
     if max_tokens <= 0:
-        return "", "", None, 0.0, "", []
+        return "", "", None, 0.0, "", [], ""
 
 
     messages = _build_offload_messages(original_messages, partial)
     t0 = time.time()
     tool_calls: list[dict] = []
+    llm_finish = ""
     if tools:
-        content, think, tool_calls, usage = _call_llm_with_tools(
+        content, think, tool_calls, usage, llm_finish = _call_llm_with_tools(
             messages, max_tokens=max_tokens, tools=tools, tool_choice=tool_choice
         )
     else:
@@ -382,15 +490,114 @@ def handoff(
             timeout=float(CONFIG["llm_timeout"]),
             enable_thinking=bool(CONFIG["llm_enable_thinking"]),
         )
+        # _call_dashscope_chat 是 PyroDash 原样复用的函数，不返回 finish_reason。
+        # 截断时必然把预算用满，所以用「completion 顶到上限」作为截断信号。
+        _ct = int((usage or {}).get("completion_tokens") or 0)
+        llm_finish = "length" if max_tokens > 0 and _ct >= max_tokens else "stop"
     elapsed = time.time() - t0
     error = ""
     if content.startswith("[Error:"):
         error = content
         content = ""
-    return content, think, usage, round(elapsed, 3), error, tool_calls
+    return content, think, usage, round(elapsed, 3), error, tool_calls, llm_finish
 
 
 # ------------------------------------------------------------------ 主流程
+
+
+# ------------------------------------------------------------ 任务类型判定
+# 路由策略：小模型只做**工具执行**和**日常事务性任务**；
+# **分析类任务不交给小模型**，直接转给大模型。
+#
+# 这里不挂第二个分类模型（为省一次推理不值得），而用三条信号，优先级从高到低：
+#   1) 客户端显式声明：body 的 `pyrodash_task`（HTTP 层会把 header
+#      `x-pyrodash-task` 合并进来）—— 只有调用方知道自己要什么，这是唯一权威信号；
+#   2) 请求带 tools → 工具执行，那是小模型的活；
+#   3) 关键词 / 长度启发式 → analysis 或 routine。
+#
+# 启发式一定会判错，所以它的作用被刻意限制为「决定要不要让小模型先试一下」：
+# 判成 analysis 就走直连交接（小模型完全不参与，不浪费本机算力）；判成 routine
+# 则小模型先答，答不完仍由预算耗尽兜底。判错的最坏结果是多/少一次本机尝试，
+# 不会产出错误答案。
+
+ANALYSIS_HINTS = (
+    "分析", "推理", "推导", "证明", "论证", "为什么", "原理", "权衡",
+    "对比", "评估", "设计一个", "设计方案", "架构", "优化", "重构",
+    "调试", "定位问题", "根因", "复杂度",
+    "analyze", "analyse", "reason", "prove", "derive", "explain why",
+    "why does", "why is", "trade-off", "tradeoff", "compare", "evaluate",
+    "design", "architect", "optimize", "refactor", "debug", "root cause",
+)
+ROUTINE_HINTS = (
+    "翻译", "格式化", "格式转换", "转换成", "提取", "重命名", "总结",
+    "摘要", "改写", "列出", "列举", "统计", "计数", "排序", "去重",
+    "补全", "加注释", "重写为",
+    "translate", "format", "convert", "extract", "rename", "summarize",
+    "summarise", "rewrite", "list", "count", "sort", "dedupe", "comment",
+)
+
+
+def _last_user_text(messages: list[dict]) -> str:
+    for m in reversed(messages):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return " ".join(
+                str(p.get("text") or "")
+                for p in c
+                if isinstance(p, dict)
+            )
+    return ""
+
+
+def classify_task(
+    body: dict[str, Any], messages: list[dict], tools: list[dict] | None
+) -> tuple[str, str]:
+    """判定任务类型 → (task, source)；task ∈ {tool, routine, analysis}。"""
+    hint = str(body.get("pyrodash_task") or "").strip().lower()
+    if hint in ("tool", "routine", "analysis"):
+        return hint, "declared"
+    if tools:
+        return "tool", "tools"
+    text = _last_user_text(messages)
+    if len(text) >= int(CONFIG["analysis_min_chars"]):
+        return "analysis", "long"
+    low = text.lower()
+    for k in ANALYSIS_HINTS:
+        if k in low:
+            return "analysis", "keyword"
+    for k in ROUTINE_HINTS:
+        if k in low:
+            return "routine", "keyword"
+    return str(CONFIG["unknown_task"]), "default"
+
+
+def _finish_reason(
+    tool_calls: list[dict],
+    route: str,
+    small_stop_type: str,
+    small_finish: str,
+    llm_finish: str,
+) -> str:
+    """OpenAI 兼容的 finish_reason。
+
+    这里以前恒返回 "stop"（tool_calls 除外），造成**截断被静默掩盖**：
+    小模型腿用满预算被切断、或远端大模型腿被 length 截断，调用方都会当作
+    「正常答完」。agent 客户端（pi / mini-swe-agent）信任这个字段就会提前
+    结束回合。现在把各种截断情形如实上报为 "length"。
+    """
+    if tool_calls:
+        return "tool_calls"
+    if route == "handoff:budget-exhausted":
+        return "length"        # 只回填了小模型的半截，必然不完整
+    if route == "small" and (small_stop_type == "limit" or small_finish == "length"):
+        return "length"        # 本机答到上限被切断
+    if llm_finish == "length":
+        return "length"        # 远端大模型被 length 截断
+    return "stop"
 
 
 def chat_completion(body: dict[str, Any]) -> dict[str, Any]:
@@ -400,26 +607,56 @@ def chat_completion(body: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("messages 不能为空")
 
     total_budget = int(body.get("max_tokens") or CONFIG["default_max_tokens"])
-    temperature = float(body.get("temperature") or CONFIG["temperature"])
+    # 注意：不能用 `body.get("temperature") or CONFIG[...]`，因为 0.0 是 falsy——
+    # 传 temperature=0（评测/确定性场景最常用的值）会被静默换成默认的 0.6。
+    temperature = (
+        float(body["temperature"])
+        if body.get("temperature") is not None
+        else float(CONFIG["temperature"])
+    )
     request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     t_start = time.time()
 
     tools = body.get("tools") or None
     tool_choice = body.get("tool_choice")
+    task, task_source = classify_task(body, messages, tools)
 
     small_text = ""
     small_tokens = 0
     small_elapsed = 0.0
     small_stop_type = ""
+    small_finish = ""          # 小模型腿的 finish_reason（工具腿来自 chat 端点）
+    small_tool_calls: list[dict] = []
     route = "small"
     offload_reason = ""
+    error = ""                # 小模型腿的错误（工具腿可能产生）
 
-    if tools:
-        # 带 tools 的请求（pi / agent 客户端）跳过本机小模型：
-        # 4B 模型做不了可靠的工具编排，硬让它试只会得到跑不通的 agent 行为。
-        # 直接交给大模型，工具调用的语义与质量都由它保证。
-        route, offload_reason = "handoff:tools", "tools"
+    if task == "tool":
+        # 工具执行是小模型的活：让它自己产出 tool_calls。
+        # 给不出可用调用就回退给大模型——**不静默失败**。
+        sc = call_small_chat(
+            messages,
+            tools=tools or [],
+            tool_choice=tool_choice,
+            max_tokens=min(CONFIG["small_max_tokens"], total_budget),
+            temperature=temperature,
+        )
+        small_tokens = sc["tokens"]
+        small_elapsed = sc["elapsed_s"]
+        small_finish = sc["finish_reason"]
+        small_text = sc["content"].strip()
+        error = sc["error"]
+        if sc["tool_calls"]:
+            small_tool_calls = sc["tool_calls"]
+            route = "small"
+        else:
+            route, offload_reason = "handoff:tools-fallback", "tools-fallback"
+    elif task == "analysis":
+        # 分析类任务不交给小模型：直接转大模型，本机一 token 都不烧，
+        # 也就不会出现「小模型先写 512 token 半成品再被丢掉」的浪费。
+        route, offload_reason = "handoff:analysis", "analysis"
     else:
+        # 日常事务性任务：小模型先答，预算内答完=本机搞定，否则交接。
         # 1) 注入 offload 协议
         small_messages = inject_protocol(messages)
         # 2) 渲染 chat 模板  + 3) 小模型先答（stop 在交接标记上）
@@ -443,15 +680,25 @@ def chat_completion(body: dict[str, Any]) -> dict[str, Any]:
     llm_tool_calls: list[dict] = []
     llm_usage: dict[str, Any] | None = None
     llm_elapsed = 0.0
-    error = ""
+    llm_finish = ""            # 远端大模型腿是否被截断（见 _finish_reason）
+    remaining = total_budget   # 大模型腿额额度，见下面分支
 
     if route == "small":
         content = small_text
     else:
-        # 小模型可能无视 stop 词仍把标记吐出来，_offload_prefix 再剥一层兼底
+        # 小模型可能无视 stop 词仍把标记吐出来，_offload_prefix 再剥一层兜底
         partial = _offload_prefix(small_text)
-        # 共享预算：大模型只能用剩下的额度（规则来自 PyroDash 的 _llm_max_tokens）
-        remaining = _llm_max_tokens(total_budget, [[None] * small_tokens], 0)
+        # 大模型腿的预算：
+        #   旧行为（SHARED_BUDGET=1）沿用 PyroDash 的 _llm_max_tokens，
+        #   「大模型只能用总预算里剩下的额度」——小模型花掉 512 后只剩 1536，
+        #   开 thinking 的模型写不完推理+代码就被 length 截断（实测
+        #   HumanEval/130：1536 失败 → 2157 通过）。小模型的 token 是本机
+        #   算的、不花钱，没有理由去占客户端付钱的远端预算。
+        #   默认改为独立预算，用客户端给的完整 total_budget。
+        if CONFIG["shared_budget"]:
+            remaining = _llm_max_tokens(total_budget, [[None] * small_tokens], 0)
+        else:
+            remaining = int(CONFIG["llm_max_tokens"]) or total_budget
         if remaining <= 0:
             route = "handoff:budget-exhausted"
             content = partial
@@ -463,6 +710,7 @@ def chat_completion(body: dict[str, Any]) -> dict[str, Any]:
                 llm_elapsed,
                 error,
                 llm_tool_calls,
+                llm_finish,
             ) = handoff(
                 messages,
                 partial,
@@ -474,6 +722,8 @@ def chat_completion(body: dict[str, Any]) -> dict[str, Any]:
 
     llm_tokens = int((llm_usage or {}).get("completion_tokens") or 0)
     prompt_tokens = int((llm_usage or {}).get("prompt_tokens") or 0)
+    # 工具调用的来源可能是小模型（task=tool 且它给了调用）或大模型
+    tool_calls_out = llm_tool_calls or small_tool_calls
 
     usage = {
         "prompt_tokens": prompt_tokens or small_tokens,
@@ -487,15 +737,17 @@ def chat_completion(body: dict[str, Any]) -> dict[str, Any]:
         "created": int(time.time()),
         "model": body.get("model") or "pyrodash-local",
         "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": content,
-                        **({"tool_calls": llm_tool_calls} if llm_tool_calls else {}),
-                    },
-                    "finish_reason": "tool_calls" if llm_tool_calls else "stop",
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                    **({"tool_calls": tool_calls_out} if tool_calls_out else {}),
                 },
+                "finish_reason": _finish_reason(
+                    tool_calls_out, route, small_stop_type, small_finish, llm_finish
+                ),
+            },
         ],
         "usage": usage,
         # 非标准扩展字段：给调用方/日志看的可观测信息
@@ -503,14 +755,21 @@ def chat_completion(body: dict[str, Any]) -> dict[str, Any]:
             "route": route,
             "offload_reason": offload_reason,
             "offloaded": route != "small",
-            "tools_passthrough": bool(tools),
-            "tool_calls": len(llm_tool_calls),
+            "task": task,
+            "task_source": task_source,
+            "tools_passthrough": bool(tools) and route != "small",
+            "tool_calls": len(tool_calls_out),
+            "tool_calls_from": (
+                "small" if small_tool_calls else ("llm" if llm_tool_calls else None)
+            ),
             "small_model": CONFIG["small_model"] or "local",
             "small_stop_type": small_stop_type or None,
+            "small_finish_reason": small_finish or None,
             "small_tokens": small_tokens,
             "llm_model": CONFIG["llm_model"] if route != "small" else None,
             "llm_tokens": llm_tokens,
             "total_budget": total_budget,
+            "llm_budget": None if route == "small" else remaining,
             "budget_used": small_tokens + llm_tokens,
             "small_elapsed_s": small_elapsed,
             "llm_elapsed_s": llm_elapsed,
@@ -593,15 +852,16 @@ class Handler(BaseHTTPRequestHandler):
         step = 96  # 按固定宽度切块，纯为兼容流式客户端
         for i in range(0, len(text), step):
             emit({"content": text[i : i + step]})
+        finish = rec["choices"][0].get("finish_reason") or "stop"
         if tool_calls:
             # OpenAI 流式协议里 tool_calls 走 delta.tool_calls，一次给完
             # （TCP 已经帮我们分帧，没必要再切）。**漏了这一步会让 pi 的工具
             # 调用在流式下静默失效** —— pi 默认就是流式 + 工具。
             for tc in tool_calls:
                 emit({"tool_calls": [tc]})
-            emit({}, "tool_calls")
-        else:
-            emit({}, "stop")
+        # finish_reason 必须透传真实值（"length" = 被截断）。以前这里硬编码
+        # "stop"，相当于把刚在 _finish_reason 里修好的截断上报又在流式路径丢掉了。
+        emit({}, finish)
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
@@ -640,6 +900,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send(400, {"error": {"message": f"请求体解析失败: {exc}"}})
             return
+
+        # 把 header 里显式声明的任务类型合并进 body（body 里的优先）。
+        # 这是路由策略唯一权威的信号，见 classify_task：调用方说是什么任务，
+        # 就按什么任务路由，不靠猜。
+        hdr_task = (self.headers.get("x-pyrodash-task") or "").strip()
+        if hdr_task and not body.get("pyrodash_task"):
+            body["pyrodash_task"] = hdr_task
 
         if path in ("/v1/stats/reset", "/stats/reset"):
             STATS.reset()

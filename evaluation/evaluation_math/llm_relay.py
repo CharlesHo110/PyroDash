@@ -118,8 +118,16 @@ def _call_dashscope_chat(
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
-        "chat_template_kwargs": {"enable_thinking": enable_thinking},
+        # 思考开关：内网网关（ai-api.bj.tkoffice.cn）只认 `thinking={"type":"disabled"}`，
+        # **不认** `chat_template_kwargs.enable_thinking`（那是 vLLM 自己的写法，
+        # 网关会静默忽略掉）。实测 deepseek-v4-pro / v4-flash：传
+        # chat_template_kwargs 时 enable_thinking 无论真假都照常输出 3700～7800
+        # 字符的思考并被 length 截断（正文 0 字）；改传 thinking 后 pro
+        # 25.3s/1400tok、flash 8.0s/1298tok 均正常答完。
+        # 开思考是服务端默认行为，所以只在需要「关」的时候显式传参。
     }
+    if not enable_thinking:
+        body["thinking"] = {"type": "disabled"}
 
     try:
         response = requests.post(url, headers=headers, json=body, timeout=timeout)
