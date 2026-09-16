@@ -1,0 +1,181 @@
+{
+  "schema": "pyrodash-offload-sweep-v1",
+  "generated": "2026-09-16T15:23:15",
+  "benchmark": "HumanEval (164 problems, pass@1, subprocess check())",
+  "settings": {
+    "max_tokens": 2048,
+    "temperature": 0.0,
+    "small_model": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf (llama.cpp, CUDA)",
+    "llm_model": "deepseek-v4-flash",
+    "llm_thinking": false,
+    "shared_budget": false,
+    "analysis_min_chars": 400,
+    "note": "云端关思考：flash/pro 开思考时会把 2048 预算全烧在 reasoning 上、正文被 length 截断"
+  },
+  "baselines": {
+    "small": {
+      "n": 164,
+      "passed": 136,
+      "pass@1": 82.9,
+      "small_tokens": 0,
+      "llm_tokens": 0,
+      "total_tokens": 0,
+      "llm_token_share_pct": 0.0,
+      "tasks": {
+        "-": 164
+      },
+      "routes": {
+        "-": 164
+      },
+      "offload_rate_pct": 0.0,
+      "avg_elapsed_s": 1.94,
+      "total_elapsed_s": 318.5,
+      "wall_s": 329.1
+    },
+    "cloud": {
+      "n": 164,
+      "passed": 157,
+      "pass@1": 95.7,
+      "small_tokens": 0,
+      "llm_tokens": 0,
+      "total_tokens": 0,
+      "llm_token_share_pct": 0.0,
+      "tasks": {
+        "-": 164
+      },
+      "routes": {
+        "-": 164
+      },
+      "offload_rate_pct": 0.0,
+      "avg_elapsed_s": 1.53,
+      "total_elapsed_s": 251.5,
+      "wall_s": 261.8
+    }
+  },
+  "arm_A_default_policy": {
+    "n": 164,
+    "passed": 158,
+    "pass@1": 96.3,
+    "small_tokens": 2543,
+    "llm_tokens": 20905,
+    "total_tokens": 23448,
+    "llm_token_share_pct": 89.2,
+    "tasks": {
+      "analysis": 140,
+      "routine": 24
+    },
+    "routes": {
+      "handoff:analysis": 140,
+      "small": 24
+    },
+    "offload_rate_pct": 85.4,
+    "avg_elapsed_s": 1.61,
+    "total_elapsed_s": 264.6,
+    "wall_s": 275.1,
+    "pass_by_route": {
+      "handoff:analysis": "134/140",
+      "small": "24/24"
+    },
+    "note": "默认策略：140/164 因长度>=400 判为 analysis 直接交云端；仅 24 题走本机"
+  },
+  "arm_B_forced_routine_sweep": {
+    "128": {
+      "n": 164,
+      "passed": 149,
+      "pass@1": 90.9,
+      "small_tokens": 17667,
+      "llm_tokens": 16246,
+      "total_tokens": 33913,
+      "llm_token_share_pct": 47.9,
+      "tasks": {
+        "routine": 164
+      },
+      "routes": {
+        "handoff:limit": 87,
+        "small": 77
+      },
+      "offload_rate_pct": 53.0,
+      "avg_elapsed_s": 2.4,
+      "total_elapsed_s": 392.9,
+      "wall_s": 404.0,
+      "pass_by_route": {
+        "handoff:limit": "81/87",
+        "small": "68/77"
+      },
+      "note": "pyrodash_task=routine 强制小模型先答，隔离出 SMALL_MAX_TOKENS 这个变量"
+    },
+    "256": {
+      "n": 164,
+      "passed": 143,
+      "pass@1": 87.2,
+      "small_tokens": 22858,
+      "llm_tokens": 3866,
+      "total_tokens": 26724,
+      "llm_token_share_pct": 14.5,
+      "tasks": {
+        "routine": 164
+      },
+      "routes": {
+        "small": 149,
+        "handoff:limit": 15
+      },
+      "offload_rate_pct": 9.1,
+      "avg_elapsed_s": 2.08,
+      "total_elapsed_s": 340.4,
+      "wall_s": 352.3,
+      "pass_by_route": {
+        "handoff:limit": "15/15",
+        "small": "128/149"
+      },
+      "note": "pyrodash_task=routine 强制小模型先答，隔离出 SMALL_MAX_TOKENS 这个变量"
+    },
+    "512": {
+      "n": 164,
+      "passed": 139,
+      "pass@1": 84.8,
+      "small_tokens": 23839,
+      "llm_tokens": 883,
+      "total_tokens": 24722,
+      "llm_token_share_pct": 3.6,
+      "tasks": {
+        "routine": 164
+      },
+      "routes": {
+        "small": 162,
+        "handoff:limit": 2
+      },
+      "offload_rate_pct": 1.2,
+      "avg_elapsed_s": 1.91,
+      "total_elapsed_s": 312.6,
+      "wall_s": 323.5,
+      "pass_by_route": {
+        "handoff:limit": "0/2",
+        "small": "139/162"
+      },
+      "note": "pyrodash_task=routine 强制小模型先答，隔离出 SMALL_MAX_TOKENS 这个变量"
+    },
+    "1024": {
+      "n": 164,
+      "passed": 139,
+      "pass@1": 84.8,
+      "small_tokens": 24188,
+      "llm_tokens": 0,
+      "total_tokens": 24188,
+      "llm_token_share_pct": 0.0,
+      "tasks": {
+        "routine": 164
+      },
+      "routes": {
+        "small": 164
+      },
+      "offload_rate_pct": 0.0,
+      "avg_elapsed_s": 1.87,
+      "total_elapsed_s": 306.1,
+      "wall_s": 316.1,
+      "pass_by_route": {
+        "small": "139/164"
+      },
+      "note": "pyrodash_task=routine 强制小模型先答，隔离出 SMALL_MAX_TOKENS 这个变量"
+    }
+  }
+}
