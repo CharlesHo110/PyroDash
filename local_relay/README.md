@@ -455,6 +455,8 @@ HumanEval 载荷中位 **563 字符**，`ANALYSIS_MIN_CHARS=400` 会把 **140/16
 原始数据：`setup/evidence/offload_sweep_humaneval164.json`；
 复现：`bash setup/_t/bench/sweep.sh`（~55 分钟）。
 
+> 📄 **完整分析（机制推导、置信区间、局限说明）见 [`ANALYSIS.md`](ANALYSIS.md)。**
+
 ---
 
 ## 6. 为什么用 `llama.cpp 原生 /completion` 而不是 `/v1/chat/completions`
