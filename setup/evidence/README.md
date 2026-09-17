@@ -8,6 +8,10 @@
 | `compare_lambda0.05_gsm8k50.json` | §4 项 3 | `bash setup/06-run-windows-native.sh --compare 50 --tag l05` |
 | `compare_lambda0.6_gsm8k50.json` | §4 项 3 / 项 4 | `PYRODASH_MODEL=models/PyroDash-4B-GRPO-Lambda-0.6 bash setup/06-run-windows-native.sh --compare 50 --tag l06` |
 | `offload_sweep_humaneval164.json` | 方案 1：`SMALL_MAX_TOKENS` 扫描 | `bash setup/_t/bench/sweep.sh`（~55 分钟） |
+| `base_model_eval_minicpm5_2b.json` | 基座替换评估：MiniCPM5-2B 值不值 | `./setup/.venv-win/Scripts/python.exe setup/_t/bench/make_base_model_evidence.py` |
+
+> ⚠️ 上面后两条用的脚本在 gitignore 的 `setup/_t/` 下（临时评测产物，不进版本库）。
+> JSON 本身是自包含的：完整复现命令在它的 `reproduce` 字段里。
 
 
 复算任一摘要：
@@ -65,3 +69,28 @@ print(json.dumps(d.get('arms') or d.get('summary'), ensure_ascii=False, indent=2
    通过率始终卡在 85–88%；多给预算只是让它写更长。且「交接后」的通过率始终 ≥「本机搞定」。
 
 完整表与分析见 `../../local_relay/README.md` §5.3。
+
+---
+
+## 结果三：基座替换评估 —— MiniCPM5-2B 值不值（`base_model_eval_minicpm5_2b.json`）
+
+同题集 164 道、同判分，只换小模型腿的基座：
+
+| 配置 | 纯本机 pass@1 | 中转 pass@1 | 云端 token 占比 | 中转均耗时 |
+|---|---|---|---|---|
+| Qwen3-4B-Instruct-2507（现役） | **82.9%** | **96.3%** | **89.2%** | 1.61s |
+| MiniCPM5-2B Q4_K_M（关思考） | 78.7% | 93.9% | 90.5% | **1.57s** |
+
+路由分布两者完全相同（`handoff:analysis` 140 / `small` 24），差异全部来自小模型真正经手的 24 道：
+**Qwen3-4B 24/24（100%）vs MiniCPM5-2B 21/24（87.5%）**。
+
+另记录了一个会**直接废掉中转**的坑（`reasoning_trap` 字段）：
+MiniCPM5-2B 模板**默认开思考**，同一批 16 题开思考 **8/16、均耗时 10.67s、输出 557～2048 token**，
+关思考 **16/16、均耗时 1.06s、输出 82～223 token**。开思考时全部超过 `SMALL_MAX_TOKENS=512`
+→ 在 relay 里 100% 命中 `stop_type=='limit'` → 每道题都交给云端 → **中转退化成纯代理、本地零节省**。
+
+> ⚠️ 噪声提醒：n=164 时单臂 95%CI ±3.0pp、两臂差 ±4.2pp。-2.4pp 在噪声内，
+> 严格表述是「**未观察到优势**」，而非「显著更差」。
+
+完整评估（推理型模型兼容性、评估协议、7 项局限、复现命令）见
+`../../local_relay/BASE_MODEL_EVAL.md`。

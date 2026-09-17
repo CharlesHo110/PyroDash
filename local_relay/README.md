@@ -269,6 +269,7 @@ curl -s http://127.0.0.1:8010/health
 | `RELAY_HOST` | `127.0.0.1` | 默认只监听本机，别随便暴露 |
 | `SMALL_BASE_URL` | `http://127.0.0.1:8080` | llama-server 地址 |
 | `SMALL_MODEL` | 自动探测 | 留空则从 `/props` 读模型名 |
+| `SMALL_TEMPLATE_KWARGS` | 空 | 透传给 `/apply-template` 的 `chat_template_kwargs`（JSON）。**换开思考的基座时必须用它关思考**，否则 100% 交接、中转退化成纯代理——见 [BASE_MODEL_EVAL.md](BASE_MODEL_EVAL.md) §7 |
 | `LLM_BASE_URL` | `https://ai-api.bj.tkoffice.cn/v1` | 远端大模型 |
 | `LLM_MODEL` | `deepseek-v4-flash` | 远端模型名 |
 | `LLM_API_KEY` | 读 `setup/.llm_key` | **密钥只在本地文件/环境变量里，绝不进仓库** |
@@ -456,6 +457,19 @@ HumanEval 载荷中位 **563 字符**，`ANALYSIS_MIN_CHARS=400` 会把 **140/16
 复现：`bash setup/_t/bench/sweep.sh`（~55 分钟）。
 
 > 📄 **完整分析（机制推导、置信区间、局限说明）见 [`ANALYSIS.md`](ANALYSIS.md)。**
+
+### 5.4 换更小的基座值不值？
+
+实测过：**不值。** 把小模型腿换成 MiniCPM5-2B（Q4_K_M 1.45 GB，比现役 Qwen3-4B 小 1/3、
+生成快 1.6 倍），默认策略下中转 **96.3% → 93.9%**，云端 token 占比反而从 89.2% 升到 90.5% ——
+本机答错的题最后还得云端重做，省下的本地 token 被多花的云端 token 吃回去了。
+
+顺带挖出一个会**直接把中转废掉**的坑：现在主流小模型（MiniCPM5-2B、Nemotron 3 Nano、
+Qwen3 全系）默认**开思考**，几千 token 的 reasoning 会把 `SMALL_MAX_TOKENS` 瞬间烧光 →
+每道题都命中 `stop_type == 'limit'` → **100% 交接、本地零节省**，中转退化成纯代理。
+换这类基座必须先关思考，而关思考要走上面表里的 `SMALL_TEMPLATE_KWARGS`。
+
+> 📄 **完整评估（推理型模型兼容性、评估协议、局限说明）见 [`BASE_MODEL_EVAL.md`](BASE_MODEL_EVAL.md)。**
 
 ---
 

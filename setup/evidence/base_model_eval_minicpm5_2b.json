@@ -1,0 +1,301 @@
+{
+  "schema": "pyrodash-base-model-eval-v1",
+  "generated": "2026-09-17T10:56:39",
+  "benchmark": "HumanEval (164 problems, pass@1, subprocess check(), temperature=0, max_tokens=2048)",
+  "question": "MiniCPM5-2B / NVIDIA Nemotron 3 Nano 4B 是否适合替换当前基座 Qwen3-4B-Instruct-2507",
+  "candidates": {
+    "current": {
+      "name": "Qwen3-4B-Instruct-2507",
+      "quant": "Q4_K_M",
+      "size_gb": 2.33,
+      "thinking_default": false,
+      "note": "chat template 中 enable_thinking 出现 0 处（实测 /props）"
+    },
+    "minicpm5_2b": {
+      "name": "MiniCPM5-2B",
+      "params": 2516756480,
+      "quant": "Q4_K_M",
+      "size_gb": 1.45,
+      "ctx_train": 131072,
+      "license": "Apache-2.0",
+      "source": "modelscope OpenBMB/MiniCPM5-2B-GGUF",
+      "thinking_default": true,
+      "thinking_switch": "chat_template_kwargs.enable_thinking=false（只在 /v1/chat/completions 与 /apply-template 上生效；顶层 enable_thinking 被 llama.cpp 忽略，实测无效）"
+    },
+    "nemotron_3_nano_4b": {
+      "name": "NVIDIA-Nemotron-3-Nano-4B",
+      "params_approx": "3.97B",
+      "quant": "Q4_K_M",
+      "size_gb": 2.9,
+      "ctx_train": 262144,
+      "source": "modelscope unsloth/NVIDIA-Nemotron-3-Nano-4B-GGUF",
+      "thinking_default": true,
+      "verdict": "未做本地实测。官方模型卡明确『先产生 reasoning trace 再作答』；AA Intelligence 14.7 与 MiniCPM5-2B 的 15 基本持平，无能力优势；输出结构与本中转的 limit 判定机制直接冲突。"
+    }
+  },
+  "settings": {
+    "judge": "子进程执行 check()",
+    "temperature": 0,
+    "max_tokens": 2048,
+    "small_max_tokens_relay": 512,
+    "analysis_min_chars": 400,
+    "llm_model": "deepseek-v4-flash",
+    "llm_thinking": false,
+    "bench_small_no_think": "BENCH_SMALL_NO_THINK=1",
+    "relay_small_template_kwargs": "SMALL_TEMPLATE_KWARGS={\"enable_thinking\": false}"
+  },
+  "results": {
+    "pure_local_small_arm": {
+      "qwen3_4b_instruct_2507": {
+        "n": 164,
+        "passed": 136,
+        "pass_at_1_pct": 82.9,
+        "median_completion_tokens": 130.5,
+        "mean_completion_tokens": 161.3,
+        "finish_reason": {
+          "length": 1,
+          "stop": 163
+        },
+        "avg_elapsed_s": 1.94
+      },
+      "minicpm5_2b_nothink": {
+        "n": 164,
+        "passed": 129,
+        "pass_at_1_pct": 78.7,
+        "median_completion_tokens": 192.5,
+        "mean_completion_tokens": 230.6,
+        "finish_reason": {
+          "length": 2,
+          "stop": 162
+        },
+        "avg_elapsed_s": 1.69
+      },
+      "cloud_reference": {
+        "n": 164,
+        "passed": 157,
+        "pass_at_1_pct": 95.7,
+        "median_completion_tokens": 139.5,
+        "mean_completion_tokens": 152.5,
+        "finish_reason": {
+          "stop": 164
+        },
+        "avg_elapsed_s": 1.53
+      }
+    },
+    "relay_end_to_end": {
+      "relay_qwen3_4b": {
+        "n": 164,
+        "passed": 158,
+        "pass_at_1_pct": 96.3,
+        "median_completion_tokens": 132.5,
+        "mean_completion_tokens": 143.0,
+        "finish_reason": {
+          "stop": 164
+        },
+        "avg_elapsed_s": 1.61
+      },
+      "relay_minicpm5_2b": {
+        "n": 164,
+        "passed": 154,
+        "pass_at_1_pct": 93.9,
+        "median_completion_tokens": 139.5,
+        "mean_completion_tokens": 151.3,
+        "finish_reason": {
+          "stop": 164
+        },
+        "avg_elapsed_s": 1.57
+      },
+      "route_breakdown_qwen3_4b": {
+        "handoff:analysis": {
+          "n": 140,
+          "passed": 134
+        },
+        "small": {
+          "n": 24,
+          "passed": 24
+        }
+      },
+      "route_breakdown_minicpm5_2b": {
+        "handoff:analysis": {
+          "n": 140,
+          "passed": 133
+        },
+        "small": {
+          "n": 24,
+          "passed": 21
+        }
+      }
+    },
+    "length_vs_correctness_bins_offline": {
+      "qwen3_4b_instruct_2507": [
+        {
+          "tok_from": 0,
+          "tok_to": 50,
+          "n": 10,
+          "pass_pct": 90.0
+        },
+        {
+          "tok_from": 50,
+          "tok_to": 100,
+          "n": 42,
+          "pass_pct": 88.1
+        },
+        {
+          "tok_from": 100,
+          "tok_to": 200,
+          "n": 78,
+          "pass_pct": 82.1
+        },
+        {
+          "tok_from": 200,
+          "tok_to": 300,
+          "n": 28,
+          "pass_pct": 85.7
+        },
+        {
+          "tok_from": 300,
+          "tok_to": 600,
+          "n": 4,
+          "pass_pct": 50.0
+        },
+        {
+          "tok_from": 600,
+          "tok_to": null,
+          "n": 2,
+          "pass_pct": 0.0
+        }
+      ],
+      "minicpm5_2b_nothink": [
+        {
+          "tok_from": 0,
+          "tok_to": 50,
+          "n": 1,
+          "pass_pct": 100.0
+        },
+        {
+          "tok_from": 50,
+          "tok_to": 100,
+          "n": 16,
+          "pass_pct": 100.0
+        },
+        {
+          "tok_from": 100,
+          "tok_to": 200,
+          "n": 74,
+          "pass_pct": 81.1
+        },
+        {
+          "tok_from": 200,
+          "tok_to": 300,
+          "n": 46,
+          "pass_pct": 76.1
+        },
+        {
+          "tok_from": 300,
+          "tok_to": 600,
+          "n": 24,
+          "pass_pct": 66.7
+        },
+        {
+          "tok_from": 600,
+          "tok_to": null,
+          "n": 3,
+          "pass_pct": 33.3
+        }
+      ]
+    },
+    "set_relations": {
+      "pure_local_qwen3_vs_minicpm": {
+        "both": 117,
+        "only_qwen3": 19,
+        "only_minicpm": 12,
+        "only_qwen3_ids": [
+          "HumanEval/33",
+          "HumanEval/38",
+          "HumanEval/57",
+          "HumanEval/67",
+          "HumanEval/75",
+          "HumanEval/79",
+          "HumanEval/81",
+          "HumanEval/83",
+          "HumanEval/89",
+          "HumanEval/90",
+          "HumanEval/91",
+          "HumanEval/96",
+          "HumanEval/99",
+          "HumanEval/115",
+          "HumanEval/121",
+          "HumanEval/122",
+          "HumanEval/146",
+          "HumanEval/154",
+          "HumanEval/159"
+        ],
+        "only_minicpm_ids": [
+          "HumanEval/1",
+          "HumanEval/26",
+          "HumanEval/62",
+          "HumanEval/93",
+          "HumanEval/95",
+          "HumanEval/103",
+          "HumanEval/110",
+          "HumanEval/127",
+          "HumanEval/133",
+          "HumanEval/135",
+          "HumanEval/140",
+          "HumanEval/142"
+        ]
+      },
+      "relay_qwen3_vs_minicpm": {
+        "both": 151,
+        "only_qwen3": 7,
+        "only_minicpm": 3,
+        "only_qwen3_ids": [
+          "HumanEval/59",
+          "HumanEval/67",
+          "HumanEval/83",
+          "HumanEval/97",
+          "HumanEval/103",
+          "HumanEval/140",
+          "HumanEval/155"
+        ],
+        "only_minicpm_ids": [
+          "HumanEval/32",
+          "HumanEval/106",
+          "HumanEval/130"
+        ]
+      }
+    }
+  },
+  "reasoning_trap": {
+    "note": "同一批 16 题，模板默认（开思考）vs chat_template_kwargs.enable_thinking=false",
+    "n": 16,
+    "with_thinking_passed": 8,
+    "with_thinking_finish_length": 8,
+    "with_thinking_avg_elapsed_s": 10.67,
+    "with_thinking_min_completion_tokens": 557,
+    "with_thinking_max_completion_tokens": 2048,
+    "same_ids_without_thinking_passed": 16,
+    "same_ids_without_thinking_avg_elapsed_s": 1.06,
+    "small_max_tokens_default": 512,
+    "why_it_matters": "SMALL_MAX_TOKENS 默认 512。开思考时这 16 题的输出 token 落在 557~2048，全部超过 512，在 relay 里会 100% 命中 stop_type=='limit' → 每道题都判成『小模型搞不定』交给云端，中转退化成纯代理、本地零节省。"
+  },
+  "verdict": {
+    "replace_current_base": "NO",
+    "reasons": [
+      "纯本机 78.7% vs 82.9%（-4.2pp）",
+      "relay 端到端 93.9% vs 96.3%（-2.4pp），云端 token 占比 90.5% > 89.2%",
+      "小模型真正经手的 24 道上：21/24 (87.5%) vs 24/24 (100%)",
+      "唯一优势（生成更快、显存更小）在 relay 端到端只反映为 1.57s vs 1.61s，因为 85% 的时间花在云端",
+      "换它必须先改 local_relay/relay_server.py 的 apply_template 透传 chat_template_kwargs，否则默认开思考 → 100% 交接 → 中转退化成纯代理"
+    ],
+    "why_oracle_did_not_transfer": "离线 oracle 表（按真实 token 阈值交接）显示 MiniCPM5-2B 上限略高（95.7% vs 94.5%），但那建立在『每道题都先过小模型』的前提上。默认路由把 85.4% 的题直接判成 analysis 交给云端，小模型只碰 24 道题，它更陡的长度-正确率曲线根本没有机会发挥作用。",
+    "noise_caveat": "n=164，单臂 95%CI ±3.0pp，两臂差 95%CI ±4.2pp。-2.4pp 在噪声内，严格说只能表述为『未观察到优势』，不能说『显著更差』。"
+  },
+  "reproduce": [
+    "python setup/08-download-gguf.py --repo OpenBMB/MiniCPM5-2B-GGUF --match Q4_K_M",
+    "cd setup/llama.cpp && ./llama-server.exe -m D:/hecan/PyroDash/models/llama/MiniCPM5-2B-Q4_K_M.gguf --port 8082 --ctx-size 16384 --n-gpu-layers 99 --jinja --host 127.0.0.1",
+    "BENCH_SMALL_URL=http://127.0.0.1:8082/v1/chat/completions BENCH_SMALL_NO_THINK=1 ./setup/.venv-win/Scripts/python.exe setup/_t/bench/run_humaneval.py --arms small --limit 164 --max-tokens 2048 --out setup/_t/bench/sweep/minicpm_off",
+    "SMALL_BASE_URL=http://127.0.0.1:8082 SMALL_TEMPLATE_KWARGS='{\"enable_thinking\": false}' ./setup/.venv-win/Scripts/python.exe local_relay/relay_server.py --host 127.0.0.1 --port 8013 --small-base-url http://127.0.0.1:8082",
+    "BENCH_RELAY_URL=http://127.0.0.1:8013/v1/chat/completions ./setup/.venv-win/Scripts/python.exe setup/_t/bench/run_humaneval.py --arms relay --limit 164 --max-tokens 2048 --out setup/_t/bench/sweep/minicpm_relay"
+  ]
+}

@@ -287,11 +287,30 @@ STATS = Stats()
 # --------------------------------------------------------------- 小模型调用
 
 
+_SMALL_TEMPLATE_KWARGS: dict[str, Any] = {}
+if (raw_kwargs := _env("SMALL_TEMPLATE_KWARGS", "").strip()):
+    try:
+        _SMALL_TEMPLATE_KWARGS = json.loads(raw_kwargs)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"✗ SMALL_TEMPLATE_KWARGS 不是合法 JSON: {exc}") from exc
+
+
 def apply_template(messages: list[dict], *, timeout: float = 60.0) -> str:
-    """用 llama-server 的 /apply-template 渲染 chat 模板，拿到裸 prompt 字符串。"""
+    """用 llama-server 的 /apply-template 渲染 chat 模板，拿到裸 prompt 字符串。
+
+    ``SMALL_TEMPLATE_KWARGS``（JSON，如 ``{"enable_thinking": false}``）会作为
+    ``chat_template_kwargs`` 透传给模板。MiniCPM5-2B / Qwen3 这类「混合思考」模型的
+    模板默认开思考：实测单题几千 token 的 reasoning 会把 ``SMALL_MAX_TOKENS`` 一口气
+    烧光、``stop_type`` 恒为 ``limit``，于是每道题都被判成「小模型搞不定」交给云端——
+    relay 退化成纯代理、本地零节省。Qwen3-4B-Instruct-2507 的模板没有
+    ``enable_thinking``，传了无副作用。
+    """
+    payload: dict[str, Any] = {"messages": messages}
+    if _SMALL_TEMPLATE_KWARGS:
+        payload["chat_template_kwargs"] = dict(_SMALL_TEMPLATE_KWARGS)
     resp = requests.post(
         f"{CONFIG['small_base_url']}/apply-template",
-        json={"messages": messages},
+        json=payload,
         timeout=timeout,
     )
     resp.raise_for_status()
